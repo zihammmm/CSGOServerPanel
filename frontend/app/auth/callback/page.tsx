@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { setToken } from "../../../lib/api";
 
-export default function AuthCallbackPage() {
+function AuthCallbackContent() {
   const params = useSearchParams();
   const router = useRouter();
 
@@ -21,3 +21,10 @@ export default function AuthCallbackPage() {
   return <p className="muted">登录处理中...</p>;
 }
 
+export default function AuthCallbackPage() {
+  return (
+    <Suspense fallback={<p className="muted">登录处理中...</p>}>
+      <AuthCallbackContent />
+    </Suspense>
+  );
+}
