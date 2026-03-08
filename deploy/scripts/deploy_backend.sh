@@ -70,7 +70,10 @@ deploy_backend() {
 
   ensure_network
 
-  docker build -t "$IMAGE_BACKEND" ./backend
+  docker build \
+    --build-arg GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" \
+    --build-arg GOSUMDB="${GOSUMDB:-sum.golang.google.cn}" \
+    -t "$IMAGE_BACKEND" ./backend
 
   if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_BACKEND"; then
     docker rm -f "$CONTAINER_BACKEND" >/dev/null
