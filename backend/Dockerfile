@@ -11,6 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/server .
 
 FROM alpine:3.21
 WORKDIR /app
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/server /app/server
 EXPOSE 8080
 CMD ["/app/server"]
