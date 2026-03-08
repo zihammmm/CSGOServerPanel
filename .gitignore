@@ -1,0 +1,11 @@
+# frontend
+frontend/node_modules
+frontend/.next
+
+# backend
+backend/bin
+
+# local env
+backend/.env
+frontend/.env.local
+
