@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { clearToken } from "../lib/api";
+import { apiFetch, clearToken, CurrentUser, steamLoginURL } from "../lib/api";
 
 const nav = [
   { href: "/dashboard", label: "DASHBOARD" },
@@ -13,6 +14,47 @@ const nav = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [me, setMe] = useState<CurrentUser | null>(null);
+  const [loadingUser, setLoadingUser] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoadingUser(true);
+      try {
+        const user = await apiFetch<CurrentUser>("/api/v1/me");
+        if (active) setMe(user);
+      } catch {
+        if (active) setMe(null);
+      } finally {
+        if (active) setLoadingUser(false);
+      }
+    };
+
+    load();
+
+    const onFocus = () => {
+      load();
+    };
+
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("storage", onFocus);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("storage", onFocus);
+    };
+  }, [pathname]);
+
+  const displayName = useMemo(() => {
+    if (!me) return "";
+    return me.steamName || me.nickname;
+  }, [me]);
+
+  const avatarLabel = useMemo(() => {
+    const first = displayName.trim().charAt(0);
+    return first ? first.toUpperCase() : "?";
+  }, [displayName]);
 
   const logout = () => {
     clearToken();
@@ -25,18 +67,39 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <h1>CSGO Control Panel</h1>
-      {nav.map((item) => (
-        <Link
-          key={item.href}
-          className={`nav-link ${pathname.startsWith(item.href) ? "active" : ""}`}
-          href={item.href}
-        >
-          {item.label}
-        </Link>
-      ))}
-      <button className="button secondary sidebar-logout" onClick={logout}>
-        退出登录
-      </button>
+      <div className="sidebar-nav">
+        {nav.map((item) => (
+          <Link
+            key={item.href}
+            className={`nav-link ${pathname.startsWith(item.href) ? "active" : ""}`}
+            href={item.href}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
+      <div className="sidebar-account">
+        {me ? (
+          <>
+            <div className="sidebar-user-line">
+              <div className="sidebar-avatar" aria-hidden="true">{avatarLabel}</div>
+              <div>
+                <p className="sidebar-name">{displayName}</p>
+                <p className="sidebar-meta">{me.role === "admin" ? "管理员" : "访客"}</p>
+              </div>
+            </div>
+            <button className="button secondary sidebar-logout" onClick={logout}>
+              退出登录
+            </button>
+          </>
+        ) : loadingUser ? (
+          <p className="sidebar-meta">正在检查登录状态...</p>
+        ) : (
+          <a className="button sidebar-login sidebar-login-bottom" href={steamLoginURL()}>
+            Steam 登录
+          </a>
+        )}
+      </div>
     </aside>
   );
 }

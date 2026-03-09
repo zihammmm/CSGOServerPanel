@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, CurrentUser, steamLoginURL } from "../../lib/api";
+import { apiFetch, CurrentUser } from "../../lib/api";
 
 type ServerStatus = {
   running: boolean;
@@ -40,7 +40,7 @@ const gameAddr = process.env.NEXT_PUBLIC_GAME_SERVER_ADDRESS || "127.0.0.1:27015
 
 export default function DashboardPage() {
   const [me, setMe] = useState<CurrentUser | null>(null);
-  const [notice, setNotice] = useState("");
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [live, setLive] = useState<MatchLive | null>(null);
   const [audit, setAudit] = useState<AuditItem[]>([]);
@@ -54,7 +54,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (typeof window !== "undefined" && sessionStorage.getItem("logout_notice") === "1") {
-      setNotice("已退出登录");
+      setShowLogoutModal(true);
       sessionStorage.removeItem("logout_notice");
     }
   }, []);
@@ -133,23 +133,6 @@ export default function DashboardPage() {
     <div>
       <div className="panel">
         <h2>DASHBOARD</h2>
-        {notice && <p className="muted">{notice}</p>}
-        {!me ? (
-          <p>
-            <a className="button" href={steamLoginURL()}>
-              Steam 登录
-            </a>
-          </p>
-        ) : (
-          <p className="muted">
-            当前用户: {me.steamName || me.nickname} ({me.role})
-          </p>
-        )}
-        <p>
-          <a className="button" href={`steam://rungameid/4465480//+connect ${gameAddr}`}>
-            点击加入服务器
-          </a>
-        </p>
       </div>
 
       <div className="grid grid-2">
@@ -160,6 +143,11 @@ export default function DashboardPage() {
           <p>模式: {status?.mode || "unknown"}</p>
           <p>
             玩家数: {status?.players ?? 0}/{status?.maxPlayers ?? 32}
+          </p>
+          <p className="server-join-wrap">
+            <a className="button server-join-button" href={`steam://rungameid/4465480//+connect ${gameAddr}`}>
+              点击加入服务器
+            </a>
           </p>
         </section>
 
@@ -268,6 +256,17 @@ export default function DashboardPage() {
             </table>
           </section>
         </>
+      )}
+      {showLogoutModal && (
+        <div className="logout-modal-backdrop" onClick={() => setShowLogoutModal(false)}>
+          <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>已退出登录</h3>
+            <p className="muted">当前会话已清除。</p>
+            <button className="button" onClick={() => setShowLogoutModal(false)}>
+              确定
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
