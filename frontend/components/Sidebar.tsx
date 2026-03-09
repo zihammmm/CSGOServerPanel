@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { clearToken } from "../lib/api";
 
 const nav = [
   { href: "/dashboard", label: "DASHBOARD" },
@@ -12,6 +13,13 @@ const nav = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const logout = () => {
+    clearToken();
+    router.replace("/dashboard");
+    router.refresh();
+  };
 
   return (
     <aside className="sidebar">
@@ -25,6 +33,9 @@ export function Sidebar() {
           {item.label}
         </Link>
       ))}
+      <button className="button secondary sidebar-logout" onClick={logout}>
+        退出登录
+      </button>
     </aside>
   );
 }

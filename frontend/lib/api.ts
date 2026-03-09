@@ -3,6 +3,7 @@ export type CurrentUser = {
   steamId: string;
   role: "guest" | "admin";
   nickname: string;
+  steamName?: string;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080";
@@ -15,6 +16,11 @@ export function getToken(): string {
 export function setToken(token: string): void {
   if (typeof window === "undefined") return;
   localStorage.setItem("auth_token", token);
+}
+
+export function clearToken(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("auth_token");
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {

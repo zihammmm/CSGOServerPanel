@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -59,10 +60,11 @@ type App struct {
 }
 
 type User struct {
-	ID       int64  `json:"id"`
-	SteamID  string `json:"steamId"`
-	Role     string `json:"role"`
-	Nickname string `json:"nickname"`
+	ID        int64  `json:"id"`
+	SteamID   string `json:"steamId"`
+	Role      string `json:"role"`
+	Nickname  string `json:"nickname"`
+	SteamName string `json:"steamName,omitempty"`
 }
 
 type Claims struct {
@@ -545,7 +547,43 @@ func (a *App) getMe(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+	if steamName, err := fetchSteamPersonaName(ctx, u.SteamID); err == nil {
+		u.SteamName = steamName
+	}
 	c.JSON(http.StatusOK, u)
+}
+
+type steamProfileXML struct {
+	SteamID string `xml:"steamID"`
+}
+
+func fetchSteamPersonaName(ctx context.Context, steamID string) (string, error) {
+	profileURL := fmt.Sprintf("https://steamcommunity.com/profiles/%s/?xml=1", url.PathEscape(steamID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "CSGOServer/1.0 (+https://steamcommunity.com)")
+	req.Header.Set("Accept", "text/xml,application/xml;q=0.9,*/*;q=0.8")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("steam profile status: %d", res.StatusCode)
+	}
+	var profile steamProfileXML
+	if err := xml.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&profile); err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(profile.SteamID)
+	if name == "" {
+		return "", errors.New("steam profile name missing")
+	}
+	return name, nil
 }
 
 func (a *App) updateNickname(c *gin.Context) {

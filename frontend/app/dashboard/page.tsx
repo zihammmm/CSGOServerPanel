@@ -133,7 +133,7 @@ export default function DashboardPage() {
           </p>
         ) : (
           <p className="muted">
-            当前用户: {me.nickname} ({me.role})
+            当前用户: {me.steamName || me.nickname} ({me.role})
           </p>
         )}
         <p>
@@ -263,4 +263,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
