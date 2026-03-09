@@ -40,6 +40,7 @@ const gameAddr = process.env.NEXT_PUBLIC_GAME_SERVER_ADDRESS || "127.0.0.1:27015
 
 export default function DashboardPage() {
   const [me, setMe] = useState<CurrentUser | null>(null);
+  const [notice, setNotice] = useState("");
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [live, setLive] = useState<MatchLive | null>(null);
   const [audit, setAudit] = useState<AuditItem[]>([]);
@@ -50,6 +51,13 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
 
   const isAdmin = useMemo(() => me?.role === "admin", [me]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && sessionStorage.getItem("logout_notice") === "1") {
+      setNotice("已退出登录");
+      sessionStorage.removeItem("logout_notice");
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -125,6 +133,7 @@ export default function DashboardPage() {
     <div>
       <div className="panel">
         <h2>DASHBOARD</h2>
+        {notice && <p className="muted">{notice}</p>}
         {!me ? (
           <p>
             <a className="button" href={steamLoginURL()}>

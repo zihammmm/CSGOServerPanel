@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -163,6 +164,7 @@ var (
 	steamIDRegex = regexp.MustCompile(`\d+$`)
 	mapRegex     = regexp.MustCompile(`map\s*:\s*([^\s]+)`)
 	playerRegex  = regexp.MustCompile(`^#\s+\d+\s+"([^"]+)"\s+\[(U:1:(\d+))\]`)
+	titleRegex   = regexp.MustCompile(`(?i)<title>\s*Steam Community\s*::\s*([^<]+)</title>`)
 )
 
 func main() {
@@ -560,8 +562,8 @@ type steamProfileXML struct {
 }
 
 func fetchSteamPersonaName(ctx context.Context, steamID string) (string, error) {
-	profileURL := fmt.Sprintf("https://steamcommunity.com/profiles/%s/?xml=1", url.PathEscape(steamID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileURL, nil)
+	profileBaseURL := fmt.Sprintf("https://steamcommunity.com/profiles/%s/", url.PathEscape(steamID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileBaseURL+"?xml=1", nil)
 	if err != nil {
 		return "", err
 	}
@@ -573,15 +575,45 @@ func fetchSteamPersonaName(ctx context.Context, steamID string) (string, error) 
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("steam profile status: %d", res.StatusCode)
+		return fetchSteamPersonaNameFromHTML(ctx, profileBaseURL)
 	}
 	var profile steamProfileXML
 	if err := xml.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&profile); err != nil {
-		return "", err
+		return fetchSteamPersonaNameFromHTML(ctx, profileBaseURL)
 	}
 	name := strings.TrimSpace(profile.SteamID)
 	if name == "" {
-		return "", errors.New("steam profile name missing")
+		return fetchSteamPersonaNameFromHTML(ctx, profileBaseURL)
+	}
+	return name, nil
+}
+
+func fetchSteamPersonaNameFromHTML(ctx context.Context, profileBaseURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileBaseURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "CSGOServer/1.0 (+https://steamcommunity.com)")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("steam profile html status: %d", res.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 2<<20))
+	if err != nil {
+		return "", err
+	}
+	matches := titleRegex.FindStringSubmatch(string(raw))
+	if len(matches) < 2 {
+		return "", errors.New("steam profile title missing")
+	}
+	name := strings.TrimSpace(html.UnescapeString(matches[1]))
+	if name == "" {
+		return "", errors.New("steam profile title empty")
 	}
 	return name, nil
 }

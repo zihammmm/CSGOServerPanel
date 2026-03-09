@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { clearToken } from "../lib/api";
 
 const nav = [
@@ -13,12 +13,13 @@ const nav = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
 
   const logout = () => {
     clearToken();
-    router.replace("/dashboard");
-    router.refresh();
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("logout_notice", "1");
+      window.location.href = "/dashboard";
+    }
   };
 
   return (
