@@ -137,7 +137,7 @@ export default function DashboardPage() {
           </p>
         )}
         <p>
-          <a className="button" href={`steam://connect/${gameAddr}`}>
+          <a className="button" href={`steam://rungameid/4465480//+connect ${gameAddr}`}>
             点击加入服务器
           </a>
         </p>
