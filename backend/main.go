@@ -161,11 +161,12 @@ func (c *RCONClient) Execute(ctx context.Context, cmd string) (string, error) {
 }
 
 var (
-	steamIDRegex    = regexp.MustCompile(`\d+$`)
-	mapRegex        = regexp.MustCompile(`map\s*:\s*([^\s]+)`)
-	maxPlayersRegex = regexp.MustCompile(`(?im)maxplayers\s*:\s*(\d+)`)
-	playerRegex     = regexp.MustCompile(`^#\s+\d+\s+"([^"]+)"\s+\[(U:1:(\d+))\]`)
-	titleRegex      = regexp.MustCompile(`(?i)<title>\s*Steam Community\s*::\s*([^<]+)</title>`)
+	steamIDRegex               = regexp.MustCompile(`\d+$`)
+	mapRegex                   = regexp.MustCompile(`map\s*:\s*([^\s]+)`)
+	maxPlayersRegex            = regexp.MustCompile(`(?im)maxplayers\s*:\s*(\d+)`)
+	playersLineMaxPlayersRegex = regexp.MustCompile(`(?im)players\s*:\s*.*\((\d+)\/\d+\s+max\)`)
+	playerRegex                = regexp.MustCompile(`^#\s+\d+\s+"([^"]+)"\s+\[(U:1:(\d+))\]`)
+	titleRegex                 = regexp.MustCompile(`(?i)<title>\s*Steam Community\s*::\s*([^<]+)</title>`)
 )
 
 func main() {
@@ -193,6 +194,7 @@ func main() {
 	}
 	go app.pollSnapshots()
 
+	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{cfg.FrontendURL},
@@ -880,15 +882,18 @@ func parsePlayers(statusOutput string) []LivePlayer {
 }
 
 func parseMaxPlayers(statusOutput string) int {
-	matches := maxPlayersRegex.FindStringSubmatch(statusOutput)
-	if len(matches) != 2 {
-		return 0
+	for _, re := range []*regexp.Regexp{maxPlayersRegex, playersLineMaxPlayersRegex} {
+		matches := re.FindStringSubmatch(statusOutput)
+		if len(matches) != 2 {
+			continue
+		}
+		maxPlayers, err := strconv.Atoi(matches[1])
+		if err != nil || maxPlayers < 0 {
+			continue
+		}
+		return maxPlayers
 	}
-	maxPlayers, err := strconv.Atoi(matches[1])
-	if err != nil || maxPlayers < 0 {
-		return 0
-	}
-	return maxPlayers
+	return 0
 }
 
 func modeToCommand(mode string) string {
