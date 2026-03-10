@@ -161,10 +161,11 @@ func (c *RCONClient) Execute(ctx context.Context, cmd string) (string, error) {
 }
 
 var (
-	steamIDRegex = regexp.MustCompile(`\d+$`)
-	mapRegex     = regexp.MustCompile(`map\s*:\s*([^\s]+)`)
-	playerRegex  = regexp.MustCompile(`^#\s+\d+\s+"([^"]+)"\s+\[(U:1:(\d+))\]`)
-	titleRegex   = regexp.MustCompile(`(?i)<title>\s*Steam Community\s*::\s*([^<]+)</title>`)
+	steamIDRegex    = regexp.MustCompile(`\d+$`)
+	mapRegex        = regexp.MustCompile(`map\s*:\s*([^\s]+)`)
+	maxPlayersRegex = regexp.MustCompile(`(?im)maxplayers\s*:\s*(\d+)`)
+	playerRegex     = regexp.MustCompile(`^#\s+\d+\s+"([^"]+)"\s+\[(U:1:(\d+))\]`)
+	titleRegex      = regexp.MustCompile(`(?i)<title>\s*Steam Community\s*::\s*([^<]+)</title>`)
 )
 
 func main() {
@@ -300,6 +301,7 @@ func migrate(db *sql.DB) error {
 			steam_id TEXT NOT NULL UNIQUE,
 			role TEXT NOT NULL DEFAULT 'guest',
 			nickname TEXT NOT NULL,
+			nickname_customized BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
@@ -312,6 +314,7 @@ func migrate(db *sql.DB) error {
 			total_kd DOUBLE PRECISION NOT NULL DEFAULT 0,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname_customized BOOLEAN NOT NULL DEFAULT FALSE`,
 		`CREATE TABLE IF NOT EXISTS rcon_audit_logs (
 			id BIGSERIAL PRIMARY KEY,
 			admin_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -429,6 +432,11 @@ func (a *App) steamCallback(c *gin.Context) {
 		role = roleAdmin
 	}
 	nickname := "Player-" + steamID[max(0, len(steamID)-6):]
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+	if steamName, err := fetchSteamPersonaName(ctx, steamID); err == nil && strings.TrimSpace(steamName) != "" {
+		nickname = strings.TrimSpace(steamName)
+	}
 
 	user, err := a.upsertUser(steamID, role, nickname)
 	if err != nil {
@@ -481,6 +489,10 @@ func (a *App) upsertUser(steamID, role, nickname string) (User, error) {
 	VALUES ($1, $2, $3)
 	ON CONFLICT (steam_id) DO UPDATE
 	SET role = EXCLUDED.role,
+		nickname = CASE
+			WHEN users.nickname_customized THEN users.nickname
+			ELSE EXCLUDED.nickname
+		END,
 		updated_at = NOW()
 	RETURNING id, steam_id, role, nickname
 	`
@@ -632,7 +644,7 @@ func (a *App) updateNickname(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "nickname must be 2-24 chars"})
 		return
 	}
-	if _, err := a.db.Exec(`UPDATE users SET nickname = $1, updated_at = NOW() WHERE id = $2`, req.Nickname, claims.UserID); err != nil {
+	if _, err := a.db.Exec(`UPDATE users SET nickname = $1, nickname_customized = TRUE, updated_at = NOW() WHERE id = $2`, req.Nickname, claims.UserID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update nickname"})
 		return
 	}
@@ -824,13 +836,17 @@ func (a *App) refreshSnapshot() {
 	if matches := mapRegex.FindStringSubmatch(strings.ToLower(statusOutput)); len(matches) == 2 {
 		mapName = matches[1]
 	}
+	maxPlayers := parseMaxPlayers(statusOutput)
+	if maxPlayers == 0 {
+		maxPlayers = 32
+	}
 
 	status := ServerStatus{
 		Running:    true,
 		Map:        mapName,
 		Mode:       "competitive",
 		Players:    len(players),
-		MaxPlayers: 32,
+		MaxPlayers: maxPlayers,
 		UpdatedAt:  now,
 	}
 	live := MatchLive{
@@ -861,6 +877,18 @@ func parsePlayers(statusOutput string) []LivePlayer {
 		})
 	}
 	return players
+}
+
+func parseMaxPlayers(statusOutput string) int {
+	matches := maxPlayersRegex.FindStringSubmatch(statusOutput)
+	if len(matches) != 2 {
+		return 0
+	}
+	maxPlayers, err := strconv.Atoi(matches[1])
+	if err != nil || maxPlayers < 0 {
+		return 0
+	}
+	return maxPlayers
 }
 
 func modeToCommand(mode string) string {
