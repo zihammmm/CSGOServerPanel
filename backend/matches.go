@@ -195,6 +195,15 @@ func (a *App) getMatchDetail(c *gin.Context) {
 		return
 	}
 	mapsPool, pickedMaps, bannedMaps := computeMapState(row.Bo, row.Status, steps)
+	if mapsPool == nil {
+		mapsPool = []string{}
+	}
+	if pickedMaps == nil {
+		pickedMaps = []string{}
+	}
+	if bannedMaps == nil {
+		bannedMaps = []string{}
+	}
 	draftTurnIndex, _ := computeDraftState(players)
 	vetoScript := buildVetoScript(row.Bo)
 	vetoTurnIndex := len(steps)

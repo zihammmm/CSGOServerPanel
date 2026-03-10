@@ -162,7 +162,7 @@ export default function MatchesPage() {
         )}
       </section>
 
-      {isAdmin && (
+      {isAdmin && !data.active && (
         <section className="panel">
           <h3>新建比赛（管理员）</h3>
           <div className="grid grid-2">

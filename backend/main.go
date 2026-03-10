@@ -165,7 +165,9 @@ var (
 	mapRegex                   = regexp.MustCompile(`map\s*:\s*([^\s]+)`)
 	maxPlayersRegex            = regexp.MustCompile(`(?im)maxplayers\s*:\s*(\d+)`)
 	playersLineMaxPlayersRegex = regexp.MustCompile(`(?im)players\s*:\s*.*\((\d+)\/\d+\s+max\)`)
-	playerRegex                = regexp.MustCompile(`^#\s+\d+\s+"([^"]+)"\s+\[(U:1:(\d+))\]`)
+	humanPlayersRegex          = regexp.MustCompile(`(?im)players\s*:\s*(\d+)\s+humans?`)
+	playerSteam3Regex          = regexp.MustCompile(`^#\s+\d+\s+\d+\s+"([^"]+)"\s+\[U:1:(\d+)\]`)
+	playerSteam2Regex          = regexp.MustCompile(`^#\s+\d+\s+\d+\s+"([^"]+)"\s+(STEAM_[^ ]+)`)
 	titleRegex                 = regexp.MustCompile(`(?i)<title>\s*Steam Community\s*::\s*([^<]+)</title>`)
 )
 
@@ -838,6 +840,10 @@ func (a *App) refreshSnapshot() {
 	if matches := mapRegex.FindStringSubmatch(strings.ToLower(statusOutput)); len(matches) == 2 {
 		mapName = matches[1]
 	}
+	playerCount := parseHumanPlayers(statusOutput)
+	if playerCount == 0 && len(players) > 0 {
+		playerCount = len(players)
+	}
 	maxPlayers := parseMaxPlayers(statusOutput)
 	if maxPlayers == 0 {
 		maxPlayers = 32
@@ -847,7 +853,7 @@ func (a *App) refreshSnapshot() {
 		Running:    true,
 		Map:        mapName,
 		Mode:       "competitive",
-		Players:    len(players),
+		Players:    playerCount,
 		MaxPlayers: maxPlayers,
 		UpdatedAt:  now,
 	}
@@ -865,13 +871,13 @@ func parsePlayers(statusOutput string) []LivePlayer {
 	players := make([]LivePlayer, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		m := playerRegex.FindStringSubmatch(line)
-		if len(m) != 4 {
+		playerID, name, ok := parsePlayerLine(line)
+		if !ok {
 			continue
 		}
 		players = append(players, LivePlayer{
-			PlayerID: m[2],
-			Name:     m[1],
+			PlayerID: playerID,
+			Name:     name,
 			Kills:    0,
 			Deaths:   0,
 			KD:       0,
@@ -879,6 +885,16 @@ func parsePlayers(statusOutput string) []LivePlayer {
 		})
 	}
 	return players
+}
+
+func parsePlayerLine(line string) (playerID, name string, ok bool) {
+	if matches := playerSteam3Regex.FindStringSubmatch(line); len(matches) == 3 {
+		return matches[2], matches[1], true
+	}
+	if matches := playerSteam2Regex.FindStringSubmatch(line); len(matches) == 3 {
+		return matches[2], matches[1], true
+	}
+	return "", "", false
 }
 
 func parseMaxPlayers(statusOutput string) int {
@@ -894,6 +910,18 @@ func parseMaxPlayers(statusOutput string) int {
 		return maxPlayers
 	}
 	return 0
+}
+
+func parseHumanPlayers(statusOutput string) int {
+	matches := humanPlayersRegex.FindStringSubmatch(statusOutput)
+	if len(matches) != 2 {
+		return 0
+	}
+	playerCount, err := strconv.Atoi(matches[1])
+	if err != nil || playerCount < 0 {
+		return 0
+	}
+	return playerCount
 }
 
 func modeToCommand(mode string) string {

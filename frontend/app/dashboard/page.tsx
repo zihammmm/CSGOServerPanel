@@ -139,7 +139,12 @@ export default function DashboardPage() {
       <div className="grid grid-2">
         <section className="panel">
           <h3>服务器状态</h3>
-          <p>运行状态: {status?.running ? "运行中" : "离线"}</p>
+          <p>
+            运行状态:{" "}
+            <span className={`status-pill ${status?.running ? "status-online" : "status-offline"}`}>
+              {status?.running ? "运行中" : "离线"}
+            </span>
+          </p>
           <p>地图: {status?.map || "unknown"}</p>
           <p>模式: {status?.mode || "unknown"}</p>
           <p>

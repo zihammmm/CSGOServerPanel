@@ -60,41 +60,50 @@ export default function MatchDetailPage() {
   const [scoreTab, setScoreTab] = useState<string>("overall");
 
   const isAdmin = useMemo(() => me?.role === "admin", [me]);
-  const mePlayer = useMemo(() => match?.players.find((p) => p.userId === me?.id) || null, [match, me]);
+  const players = match?.players ?? [];
+  const mapResults = match?.mapResults ?? [];
+  const pickedMaps = match?.pickedMaps ?? [];
+  const mapsPool = match?.mapsPool ?? [];
+  const vetoSteps = match?.vetoSteps ?? [];
+  const draftTurns = match?.draftTurns ?? [];
+  const vetoScript = match?.vetoScript ?? [];
+  const playerStats = match?.playerStats ?? [];
 
-  const teamA = useMemo(() => (match?.players || []).filter((p) => p.team === "A"), [match]);
-  const teamB = useMemo(() => (match?.players || []).filter((p) => p.team === "B"), [match]);
+  const mePlayer = useMemo(() => players.find((p) => p.userId === me?.id) || null, [players, me]);
+
+  const teamA = useMemo(() => players.filter((p) => p.team === "A"), [players]);
+  const teamB = useMemo(() => players.filter((p) => p.team === "B"), [players]);
   const scoreTabs = useMemo(() => {
     if (!match || match.status !== "finished") return [];
     return [
       { key: "overall", label: "总数据" },
-      ...match.mapResults.map((m) => ({ key: m.key, label: m.map })),
+      ...mapResults.map((m) => ({ key: m.key, label: m.map })),
     ];
-  }, [match]);
+  }, [match, mapResults]);
 
   const activeMapResult = useMemo(() => {
     if (!match || match.status !== "finished" || scoreTab === "overall") return null;
-    return match.mapResults.find((m) => m.key === scoreTab) || null;
-  }, [match, scoreTab]);
+    return mapResults.find((m) => m.key === scoreTab) || null;
+  }, [match, scoreTab, mapResults]);
 
   const activePlayerStats = useMemo(() => {
     if (!match || match.status !== "finished") return [];
-    return activeMapResult ? activeMapResult.playerStats : match.playerStats;
-  }, [match, activeMapResult]);
+    return activeMapResult ? (activeMapResult.playerStats ?? []) : playerStats;
+  }, [match, activeMapResult, playerStats]);
 
   const teamAStats = useMemo(() => activePlayerStats.filter((s) => s.team === "A"), [activePlayerStats]);
   const teamBStats = useMemo(() => activePlayerStats.filter((s) => s.team === "B"), [activePlayerStats]);
-  const unassigned = useMemo(() => (match?.players || []).filter((p) => !p.team && !p.isCaptain), [match]);
+  const unassigned = useMemo(() => players.filter((p) => !p.team && !p.isCaptain), [players]);
 
   const draftTurnTeam = useMemo(() => {
     if (!match || match.status !== "player_draft") return null;
-    return match.draftTurns[match.draftTurnIndex] || null;
-  }, [match]);
+    return draftTurns[match.draftTurnIndex] || null;
+  }, [match, draftTurns]);
 
   const vetoTurn = useMemo(() => {
     if (!match || match.status !== "map_veto") return null;
-    return match.vetoScript[match.vetoTurnIndex] || null;
-  }, [match]);
+    return vetoScript[match.vetoTurnIndex] || null;
+  }, [match, vetoScript]);
 
   const canJoin = !!match && match.status === "gathering" && !!me && !mePlayer;
 
@@ -200,7 +209,7 @@ export default function MatchDetailPage() {
     run(() => forceStartMatch(matchId, me.id, me.role));
   };
 
-  const captainOptions = (match?.players || []).map((p) => ({ label: `${p.nickname} (${p.steamId})`, value: p.userId }));
+  const captainOptions = players.map((p) => ({ label: `${p.nickname} (${p.steamId})`, value: p.userId }));
 
   if (loading) {
     return <section className="panel"><p className="muted">比赛详情加载中...</p></section>;
@@ -242,8 +251,8 @@ export default function MatchDetailPage() {
 
       <section className="panel">
         <h3>比分板</h3>
-        <p>当前人数: {match.players.length}/10</p>
-        <p>比赛地图: {match.pickedMaps.join(" / ") || "-"}</p>
+        <p>当前人数: {players.length}/10</p>
+        <p>比赛地图: {pickedMaps.join(" / ") || "-"}</p>
         <p className="muted">最后更新时间: {formatTime(match.updatedAt)}</p>
         {match.status === "finished" && (
           <>
@@ -442,7 +451,7 @@ export default function MatchDetailPage() {
           <h3>BP 选图</h3>
           <p>当前回合: {vetoTurn ? `Team ${vetoTurn.team} ${vetoTurn.action === "ban" ? "Ban" : "Pick"}` : "已完成"}</p>
           <div className="map-pool">
-            {match.mapsPool.map((map) => (
+            {mapsPool.map((map) => (
               <button
                 key={map}
                 className="button secondary"
@@ -456,7 +465,7 @@ export default function MatchDetailPage() {
           {!canVeto && <p className="muted">仅当前回合队长可操作 BP。</p>}
           <h4>BP 轨迹</h4>
           <ul>
-            {match.vetoSteps.map((s) => (
+            {vetoSteps.map((s) => (
               <li key={`${s.order}-${s.map}`}>#{s.order} Team {s.team} {s.action.toUpperCase()} {s.map}</li>
             ))}
           </ul>

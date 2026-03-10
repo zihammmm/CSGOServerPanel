@@ -245,6 +245,18 @@ td {
   color: #d8e0ee;
 }
 
+.status-online {
+  border-color: rgba(54, 192, 168, 0.45);
+  background: rgba(54, 192, 168, 0.14);
+  color: #98f0dd;
+}
+
+.status-offline {
+  border-color: rgba(223, 92, 92, 0.45);
+  background: rgba(223, 92, 92, 0.14);
+  color: #ffb1b1;
+}
+
 .phase-line {
   display: flex;
   flex-wrap: wrap;
