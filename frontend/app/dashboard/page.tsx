@@ -37,6 +37,28 @@ type AuditItem = {
 };
 
 const gameAddr = process.env.NEXT_PUBLIC_GAME_SERVER_ADDRESS || "127.0.0.1:27015";
+const officialMapPool = [
+  { value: "de_mirage", label: "荒漠迷城" },
+  { value: "de_inferno", label: "炼狱小镇" },
+  { value: "de_anubis", label: "阿努比斯" },
+  { value: "de_ancient", label: "远古遗迹" },
+  { value: "de_nuke", label: "核子危机" },
+  { value: "de_dust2", label: "炙热沙城 II" },
+  { value: "de_train", label: "列车停放站" },
+] as const;
+const modeOptions = [
+  { value: "competitive", label: "竞技模式" },
+  { value: "casual", label: "休闲模式" },
+  { value: "deathmatch", label: "死斗模式" },
+] as const;
+
+function formatMapName(map: string): string {
+  return officialMapPool.find((item) => item.value === map)?.label || map || "未知地图";
+}
+
+function formatModeName(mode: string): string {
+  return modeOptions.find((item) => item.value === mode)?.label || mode || "未知模式";
+}
 
 export default function DashboardPage() {
   const [me, setMe] = useState<CurrentUser | null>(null);
@@ -50,7 +72,7 @@ export default function DashboardPage() {
   const [kickReason, setKickReason] = useState("");
   const [error, setError] = useState("");
 
-  const isAdmin = useMemo(() => me?.role === "admin", [me]);
+  const isAdmin = useMemo(() => me?.role === "admin" || me?.role === "super_admin", [me]);
   const hasLivePlayers = (status?.players ?? 0) > 0;
 
   useEffect(() => {
@@ -145,8 +167,8 @@ export default function DashboardPage() {
               {status?.running ? "运行中" : "离线"}
             </span>
           </p>
-          <p>地图: {status?.map || "unknown"}</p>
-          <p>模式: {status?.mode || "unknown"}</p>
+          <p>地图: {formatMapName(status?.map || "")}</p>
+          <p>模式: {formatModeName(status?.mode || "")}</p>
           <p>
             玩家数: {status?.players ?? 0}/{status?.maxPlayers ?? 32}
           </p>
@@ -219,16 +241,24 @@ export default function DashboardPage() {
               </div>
               <div>
                 <h4>切换地图 / 模式</h4>
-                <input placeholder="de_mirage" value={mapName} onChange={(e) => setMapName(e.target.value)} />
+                <select value={mapName} onChange={(e) => setMapName(e.target.value)}>
+                  {officialMapPool.map((map) => (
+                    <option key={map.value} value={map.value}>
+                      {map.label}
+                    </option>
+                  ))}
+                </select>
                 <p>
                   <button className="button secondary" onClick={() => runAdminAction("/api/v1/admin/rcon/change-map", { map: mapName })}>
                     切换地图
                   </button>
                 </p>
                 <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="competitive">competitive</option>
-                  <option value="casual">casual</option>
-                  <option value="deathmatch">deathmatch</option>
+                  {modeOptions.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
                 </select>
                 <p>
                   <button className="button secondary" onClick={() => runAdminAction("/api/v1/admin/rcon/change-mode", { mode })}>

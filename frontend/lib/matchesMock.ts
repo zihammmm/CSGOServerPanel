@@ -577,9 +577,9 @@ export async function createMatch(creator: MatchUser, bo: BoType, captainMode: C
   return cloneMatch(match);
 }
 
-export async function startMatch(id: string, actorUserId: number, actorRole: "guest" | "admin"): Promise<MatchDetail> {
+export async function startMatch(id: string, actorUserId: number, actorRole: "guest" | "admin" | "super_admin"): Promise<MatchDetail> {
   const match = getMatchById(id);
-  if (actorRole !== "admin") {
+  if (actorRole !== "admin" && actorRole !== "super_admin") {
     throw new Error("仅管理员可开启比赛");
   }
   if (match.status !== "gathering") {
@@ -732,9 +732,9 @@ export async function launchMatch(id: string, actorUserId: number): Promise<Matc
   return cloneMatch(match);
 }
 
-export async function forceStartMatch(id: string, actorUserId: number, actorRole: "guest" | "admin"): Promise<MatchDetail> {
+export async function forceStartMatch(id: string, actorUserId: number, actorRole: "guest" | "admin" | "super_admin"): Promise<MatchDetail> {
   const match = getMatchById(id);
-  if (actorUserId <= 0 || actorRole !== "admin") {
+  if (actorUserId <= 0 || (actorRole !== "admin" && actorRole !== "super_admin")) {
     throw new Error("仅管理员可强制开始比赛");
   }
   if (match.status !== "gathering") {

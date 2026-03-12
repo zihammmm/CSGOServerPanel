@@ -26,6 +26,12 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN", { hour12: false });
 }
 
+function formatRole(role: CurrentUser["role"]): string {
+  if (role === "super_admin") return "超级管理员";
+  if (role === "admin") return "管理员";
+  return "访客";
+}
+
 export default function MatchesPage() {
   const [me, setMe] = useState<CurrentUser | null>(null);
   const [data, setData] = useState<MatchesResponse>({ active: null, history: [] });
@@ -34,7 +40,7 @@ export default function MatchesPage() {
   const [createBO, setCreateBO] = useState<BoType>(3);
   const [createCaptainMode, setCreateCaptainMode] = useState<CaptainMode>("admin_assigned");
 
-  const isAdmin = useMemo(() => me?.role === "admin", [me]);
+  const isAdmin = useMemo(() => me?.role === "admin" || me?.role === "super_admin", [me]);
 
   const loadMe = async () => {
     try {
@@ -94,7 +100,7 @@ export default function MatchesPage() {
       <section className="panel">
         <h2>比赛中心</h2>
         {me ? (
-          <p className="muted">当前用户: {me.nickname} ({me.role})</p>
+          <p className="muted">当前用户: {me.nickname}（{formatRole(me.role)}）</p>
         ) : (
           <p>
             <a className="button" href={steamLoginURL()}>
@@ -118,7 +124,7 @@ export default function MatchesPage() {
             <p>创建者: {data.active.creatorName}</p>
             <p>创建时间: {formatTime(data.active.createdAt)}</p>
             {data.active.scoreA !== null && data.active.scoreB !== null && (
-              <p>比分: Team A {data.active.scoreA} : {data.active.scoreB} Team B</p>
+              <p>比分: A 队 {data.active.scoreA} : {data.active.scoreB} B 队</p>
             )}
             <p className="action-row">
               <Link className="button" href={`/matches/${data.active.id}`}>查看详情</Link>

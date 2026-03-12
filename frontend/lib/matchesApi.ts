@@ -16,7 +16,7 @@ export async function createMatch(_creator: MatchUser, bo: BoType, captainMode: 
   });
 }
 
-export async function startMatch(id: string, _actorUserId: number, _actorRole: "guest" | "admin"): Promise<MatchDetail> {
+export async function startMatch(id: string, _actorUserId: number, _actorRole: "guest" | "admin" | "super_admin"): Promise<MatchDetail> {
   return apiFetch<MatchDetail>(`/api/v1/admin/matches/${id}/start`, {
     method: "POST",
     body: JSON.stringify({}),
@@ -65,7 +65,7 @@ export async function launchMatch(id: string, _actorUserId: number): Promise<Mat
   });
 }
 
-export async function forceStartMatch(id: string, _actorUserId: number, _actorRole: "guest" | "admin"): Promise<MatchDetail> {
+export async function forceStartMatch(id: string, _actorUserId: number, _actorRole: "guest" | "admin" | "super_admin"): Promise<MatchDetail> {
   return apiFetch<MatchDetail>(`/api/v1/admin/matches/${id}/force-start`, {
     method: "POST",
     body: JSON.stringify({}),

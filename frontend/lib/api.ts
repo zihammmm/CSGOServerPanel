@@ -1,7 +1,7 @@
 export type CurrentUser = {
   id: number;
   steamId: string;
-  role: "guest" | "admin";
+  role: "guest" | "admin" | "super_admin";
   nickname: string;
   steamName?: string;
 };

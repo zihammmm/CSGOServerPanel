@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	roleGuest = "guest"
-	roleAdmin = "admin"
+	roleGuest      = "guest"
+	roleAdmin      = "admin"
+	roleSuperAdmin = "super_admin"
 )
 
 type Config struct {
@@ -40,6 +41,7 @@ type Config struct {
 	SteamRealm              string
 	SteamReturnTo           string
 	AdminSteamIDs           map[string]struct{}
+	SuperAdminSteamIDs      map[string]struct{}
 	RCONHost                string
 	RCONPassword            string
 	RCONTimeout             time.Duration
@@ -183,6 +185,12 @@ func main() {
 	if err := migrate(db); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
+	if err := syncConfiguredAdmins(db, cfg.AdminSteamIDs); err != nil {
+		log.Fatalf("sync configured admins: %v", err)
+	}
+	if err := syncConfiguredSuperAdmins(db, cfg.SuperAdminSteamIDs); err != nil {
+		log.Fatalf("sync configured super admins: %v", err)
+	}
 
 	app := &App{
 		cfg: cfg,
@@ -230,6 +238,9 @@ func main() {
 		admin := authed.Group("/admin")
 		admin.Use(app.adminMiddleware())
 		{
+			admin.GET("/admins", app.listAdmins)
+			admin.POST("/admins", app.addAdmin)
+			admin.DELETE("/admins/:steamId", app.removeAdmin)
 			admin.POST("/rcon/kick", app.adminKick)
 			admin.POST("/rcon/change-map", app.adminChangeMap)
 			admin.POST("/rcon/change-mode", app.adminChangeMode)
@@ -254,6 +265,13 @@ func loadConfig() Config {
 			adminIDs[id] = struct{}{}
 		}
 	}
+	superAdminIDs := map[string]struct{}{}
+	for _, v := range strings.Split(os.Getenv("SUPER_ADMIN_STEAM_IDS"), ",") {
+		id := strings.TrimSpace(v)
+		if id != "" {
+			superAdminIDs[id] = struct{}{}
+		}
+	}
 	frontendURL := getEnv("FRONTEND_URL", "http://localhost:3000")
 	return Config{
 		Port:                    getEnv("PORT", "8080"),
@@ -264,6 +282,7 @@ func loadConfig() Config {
 		SteamRealm:              getEnv("STEAM_REALM", "http://localhost:8080"),
 		SteamReturnTo:           getEnv("STEAM_RETURN_TO", "http://localhost:8080/api/v1/auth/steam/callback"),
 		AdminSteamIDs:           adminIDs,
+		SuperAdminSteamIDs:      superAdminIDs,
 		RCONHost:                getEnv("RCON_HOST", ""),
 		RCONPassword:            getEnv("RCON_PASSWORD", ""),
 		RCONTimeout:             getDurationEnv("RCON_TIMEOUT", 5*time.Second),
@@ -431,10 +450,6 @@ func (a *App) steamCallback(c *gin.Context) {
 		return
 	}
 
-	role := roleGuest
-	if _, exists := a.cfg.AdminSteamIDs[steamID]; exists {
-		role = roleAdmin
-	}
 	nickname := "Player-" + steamID[max(0, len(steamID)-6):]
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer cancel()
@@ -442,7 +457,7 @@ func (a *App) steamCallback(c *gin.Context) {
 		nickname = strings.TrimSpace(steamName)
 	}
 
-	user, err := a.upsertUser(steamID, role, nickname)
+	user, err := a.upsertUser(steamID, nickname, false)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upsert user"})
 		return
@@ -487,12 +502,20 @@ func verifySteamResponse(query url.Values) (bool, error) {
 	return strings.Contains(string(raw), "is_valid:true"), nil
 }
 
-func (a *App) upsertUser(steamID, role, nickname string) (User, error) {
+func (a *App) upsertUser(steamID, nickname string, forceAdmin bool) (User, error) {
+	role := roleGuest
+	if forceAdmin {
+		role = roleAdmin
+	}
 	query := `
 	INSERT INTO users (steam_id, role, nickname)
 	VALUES ($1, $2, $3)
 	ON CONFLICT (steam_id) DO UPDATE
-	SET role = EXCLUDED.role,
+	SET role = CASE
+			WHEN users.role = 'super_admin' THEN 'super_admin'
+			WHEN EXCLUDED.role = 'admin' THEN 'admin'
+			ELSE users.role
+		END,
 		nickname = CASE
 			WHEN users.nickname_customized THEN users.nickname
 			ELSE EXCLUDED.nickname
@@ -506,6 +529,38 @@ func (a *App) upsertUser(steamID, role, nickname string) (User, error) {
 	}
 	_, _ = a.db.Exec(`INSERT INTO player_stats (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, u.ID)
 	return u, nil
+}
+
+func syncConfiguredAdmins(db *sql.DB, adminIDs map[string]struct{}) error {
+	for steamID := range adminIDs {
+		nickname := "Player-" + steamID[max(0, len(steamID)-6):]
+		if _, err := db.Exec(`
+			INSERT INTO users (steam_id, role, nickname)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (steam_id) DO UPDATE
+			SET role = 'admin',
+				updated_at = NOW()
+		`, steamID, roleAdmin, nickname); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func syncConfiguredSuperAdmins(db *sql.DB, superAdminIDs map[string]struct{}) error {
+	for steamID := range superAdminIDs {
+		nickname := "Player-" + steamID[max(0, len(steamID)-6):]
+		if _, err := db.Exec(`
+			INSERT INTO users (steam_id, role, nickname)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (steam_id) DO UPDATE
+			SET role = 'super_admin',
+				updated_at = NOW()
+		`, steamID, roleSuperAdmin, nickname); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) issueToken(user User) (string, error) {
@@ -541,6 +596,13 @@ func (a *App) authMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
+		currentUser, err := a.getUserByID(claims.UserID)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+			return
+		}
+		claims.Role = currentUser.Role
+		claims.Nickname = currentUser.Nickname
 		c.Set("user", claims)
 		c.Next()
 	}
@@ -549,7 +611,12 @@ func (a *App) authMiddleware() gin.HandlerFunc {
 func (a *App) adminMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, ok := c.Get("user")
-		if !ok || claims.(*Claims).Role != roleAdmin {
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin only"})
+			return
+		}
+		role := claims.(*Claims).Role
+		if role != roleAdmin && role != roleSuperAdmin {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin only"})
 			return
 		}
@@ -571,6 +638,102 @@ func (a *App) getMe(c *gin.Context) {
 		u.SteamName = steamName
 	}
 	c.JSON(http.StatusOK, u)
+}
+
+func (a *App) getUserByID(userID int64) (User, error) {
+	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname FROM users WHERE id = $1`, userID)
+	var u User
+	err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname)
+	return u, err
+}
+
+func (a *App) listAdmins(c *gin.Context) {
+	rows, err := a.db.Query(`
+		SELECT id, steam_id, role, nickname
+		FROM users
+		WHERE role IN ('admin', 'super_admin')
+		ORDER BY updated_at DESC, id DESC
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query admins"})
+		return
+	}
+	defer rows.Close()
+
+	items := make([]User, 0)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan admins"})
+			return
+		}
+		items = append(items, u)
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (a *App) addAdmin(c *gin.Context) {
+	var req struct {
+		SteamID  string `json:"steamId"`
+		Nickname string `json:"nickname"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	steamID := strings.TrimSpace(req.SteamID)
+	if !steamIDRegex.MatchString(steamID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid steamId"})
+		return
+	}
+	nickname := strings.TrimSpace(req.Nickname)
+	if nickname == "" {
+		nickname = "Player-" + steamID[max(0, len(steamID)-6):]
+	}
+	user, err := a.upsertUser(steamID, nickname, true)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add admin"})
+		return
+	}
+	c.JSON(http.StatusOK, user)
+}
+
+func (a *App) removeAdmin(c *gin.Context) {
+	claims := c.MustGet("user").(*Claims)
+	if claims.Role != roleSuperAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "super admin only"})
+		return
+	}
+	steamID := strings.TrimSpace(c.Param("steamId"))
+	if !steamIDRegex.MatchString(steamID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid steamId"})
+		return
+	}
+	res, err := a.db.Exec(`UPDATE users SET role = 'guest', updated_at = NOW() WHERE steam_id = $1 AND role = 'admin'`, steamID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove admin"})
+		return
+	}
+	aff, _ := res.RowsAffected()
+	if aff == 0 {
+		var existingRole string
+		err := a.db.QueryRow(`SELECT role FROM users WHERE steam_id = $1`, steamID).Scan(&existingRole)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "admin not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query admin"})
+			return
+		}
+		if existingRole == roleSuperAdmin {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cannot remove super admin"})
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "admin not found"})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 type steamProfileXML struct {

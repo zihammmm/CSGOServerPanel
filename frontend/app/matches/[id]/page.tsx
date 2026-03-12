@@ -50,6 +50,18 @@ function formatMapName(map: string): string {
   return mapNameText[map] || map;
 }
 
+function formatCaptainMode(mode: string): string {
+  return mode === "admin_assigned" ? "管理员指定" : "系统随机";
+}
+
+function formatTeamName(team: string): string {
+  return team === "A" ? "A 队" : team === "B" ? "B 队" : team;
+}
+
+function formatVetoAction(action: string): string {
+  return action === "ban" ? "禁用" : action === "pick" ? "选择" : action;
+}
+
 function formatCountdown(seconds: number): string {
   const safe = Math.max(0, seconds);
   return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
@@ -85,7 +97,7 @@ export default function MatchDetailPage() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
-  const isAdmin = useMemo(() => me?.role === "admin", [me]);
+  const isAdmin = useMemo(() => me?.role === "admin" || me?.role === "super_admin", [me]);
   const players = match?.players ?? [];
   const mapResults = match?.mapResults ?? [];
   const pickedMaps = match?.pickedMaps ?? [];
@@ -295,7 +307,7 @@ export default function MatchDetailPage() {
         <h2>{match.title}</h2>
         <p>比赛 ID: {match.id}</p>
         <p>状态: <span className="status-pill">{statusText[match.status]}</span></p>
-        <p>BO: BO{match.bo} | 队长策略: {match.captainMode === "admin_assigned" ? "管理员指定" : "随机"}</p>
+        <p>BO: BO{match.bo} | 队长策略: {formatCaptainMode(match.captainMode)}</p>
         <p>创建者: {match.creatorName} | 创建时间: {formatTime(match.createdAt)}</p>
         <p>服务器: {match.serverAddr}</p>
         <div className="phase-track">
@@ -319,7 +331,7 @@ export default function MatchDetailPage() {
         <p>
           比赛地图: {pickedMapDetails.length > 0
             ? pickedMapDetails.map((item) => {
-              const pickedBy = item.pickedByTeam ? `Team ${item.pickedByTeam} Pick` : "默认图";
+              const pickedBy = item.pickedByTeam ? `${formatTeamName(item.pickedByTeam)}选择` : "默认图";
               const side = item.startSide === "T" ? "，Pick 方默认当匪" : "";
               return `${formatMapName(item.map)}（${pickedBy}${side}）`;
             }).join(" / ")
@@ -341,9 +353,9 @@ export default function MatchDetailPage() {
             </div>
             <p>
               <strong>
-                {activeMapResult ? `${activeMapResult.map} 比分` : "总比分"}: Team A{" "}
+                {activeMapResult ? `${formatMapName(activeMapResult.map)} 比分` : "总比分"}: A 队{" "}
                 {activeMapResult ? activeMapResult.scoreA : (match.scoreA ?? "-")} :{" "}
-                {activeMapResult ? activeMapResult.scoreB : (match.scoreB ?? "-")} Team B
+                {activeMapResult ? activeMapResult.scoreB : (match.scoreB ?? "-")} B 队
               </strong>
             </p>
           </>
@@ -351,7 +363,7 @@ export default function MatchDetailPage() {
         {match.status !== "finished" && (
           <div className="team-panels">
             <div className="team-panel team-panel-a">
-              <h4>{captainA ? `${captainA.userId} 的队伍` : "Team A"}</h4>
+              <h4>{captainA ? `${captainA.nickname} 的队伍` : "A 队"}</h4>
               <ul>
                 {teamA.map((p) => (
                   <li key={p.userId}>{p.nickname} {p.isCaptain ? "(队长)" : ""}</li>
@@ -359,7 +371,7 @@ export default function MatchDetailPage() {
               </ul>
             </div>
             <div className="team-panel team-panel-b">
-              <h4>{captainB ? `${captainB.userId} 的队伍` : "Team B"}</h4>
+              <h4>{captainB ? `${captainB.nickname} 的队伍` : "B 队"}</h4>
               <ul>
                 {teamB.map((p) => (
                   <li key={p.userId}>{p.nickname} {p.isCaptain ? "(队长)" : ""}</li>
@@ -419,7 +431,7 @@ export default function MatchDetailPage() {
         {match.status === "finished" && (
           <div className="grid grid-2">
             <div>
-              <h4>Team A 数据</h4>
+              <h4>A 队数据</h4>
               <table>
                 <thead>
                   <tr>
@@ -451,7 +463,7 @@ export default function MatchDetailPage() {
               </table>
             </div>
             <div>
-              <h4>Team B 数据</h4>
+              <h4>B 队数据</h4>
               <table>
                 <thead>
                   <tr>
@@ -518,7 +530,7 @@ export default function MatchDetailPage() {
       {match.status === "player_draft" && (
         <section className="panel">
           <h3>队长选人（ABBA 蛇形）</h3>
-          <p>当前回合: {draftTurnTeam ? `Team ${draftTurnTeam}` : "-"}</p>
+          <p>当前回合: {draftTurnTeam ? formatTeamName(draftTurnTeam) : "-"}</p>
           <p>剩余时间: {formatCountdown(countdownSeconds)}，超时后系统随机选人</p>
           <p className="muted">{"顺序: A -> B -> B -> A -> A -> B -> B -> A"}</p>
           <div className="pick-grid">
@@ -540,8 +552,8 @@ export default function MatchDetailPage() {
       {match.status === "map_veto" && (
         <section className="panel">
           <h3>BP 选图</h3>
-          <p>当前回合: {vetoTurn ? `Team ${vetoTurn.team} ${vetoTurn.action === "ban" ? "Ban" : "Pick"}` : "已完成"}</p>
-          <p>剩余时间: {formatCountdown(countdownSeconds)}，超时后系统随机 {vetoTurn?.action === "ban" ? "Ban" : "Pick"} 一张图</p>
+          <p>当前回合: {vetoTurn ? `${formatTeamName(vetoTurn.team)}${formatVetoAction(vetoTurn.action)}` : "已完成"}</p>
+          <p>剩余时间: {formatCountdown(countdownSeconds)}，超时后系统随机{formatVetoAction(vetoTurn?.action || "")}一张图</p>
           <div className="map-pool">
             {mapsPool.map((map) => (
               <button
@@ -550,7 +562,7 @@ export default function MatchDetailPage() {
                 disabled={!canVeto}
                 onClick={() => run(() => vetoMap(matchId, me!.id, map))}
               >
-                {vetoTurn?.action === "ban" ? "Ban" : "Pick"} {formatMapName(map)}
+                {formatVetoAction(vetoTurn?.action || "")} {formatMapName(map)}
               </button>
             ))}
           </div>
@@ -558,7 +570,7 @@ export default function MatchDetailPage() {
           <h4>BP 轨迹</h4>
           <ul>
             {vetoSteps.map((s) => (
-              <li key={`${s.order}-${s.map}`}>#{s.order} Team {s.team} {s.action.toUpperCase()} {formatMapName(s.map)}</li>
+              <li key={`${s.order}-${s.map}`}>#{s.order} {formatTeamName(s.team)}{formatVetoAction(s.action)} {formatMapName(s.map)}</li>
             ))}
           </ul>
         </section>

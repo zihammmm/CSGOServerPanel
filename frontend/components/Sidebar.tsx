@@ -64,6 +64,8 @@ export function Sidebar() {
     }
   };
 
+  const roleText = me?.role === "super_admin" ? "超级管理员" : me?.role === "admin" ? "管理员" : "访客";
+
   return (
     <aside className="sidebar">
       <h1>CSGO Control Panel</h1>
@@ -85,7 +87,7 @@ export function Sidebar() {
               <div className="sidebar-avatar" aria-hidden="true">{avatarLabel}</div>
               <div>
                 <p className="sidebar-name">{displayName}</p>
-                <p className="sidebar-meta">{me.role === "admin" ? "管理员" : "访客"}</p>
+                <p className="sidebar-meta">{roleText}</p>
               </div>
             </div>
             <button className="button secondary sidebar-logout" onClick={logout}>
