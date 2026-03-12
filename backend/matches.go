@@ -105,6 +105,7 @@ func (a *App) registerMatchRoutes(authed *gin.RouterGroup, admin *gin.RouterGrou
 	admin.POST("/matches", a.adminCreateMatch)
 	admin.POST("/matches/:id/start", a.adminStartMatch)
 	admin.POST("/matches/:id/force-start", a.adminForceStartMatch)
+	admin.POST("/matches/:id/cancel", a.adminCancelMatch)
 	admin.POST("/matches/:id/captains", a.adminAssignCaptains)
 	admin.POST("/matches/:id/launch", a.adminLaunchMatch)
 	admin.POST("/matches/:id/finish", a.adminFinishMatch)
@@ -433,6 +434,25 @@ func (a *App) adminForceStartMatch(c *gin.Context) {
 			return err
 		}
 		return a.progressAfterPlayerCount(c.Request.Context(), tx, row.ID, row.CaptainMode)
+	})
+	if err != nil {
+		a.handleMatchError(c, err)
+		return
+	}
+	a.returnMatchDetailByDisplayID(c, id)
+}
+
+func (a *App) adminCancelMatch(c *gin.Context) {
+	claims := c.MustGet("user").(*Claims)
+	id := strings.TrimSpace(c.Param("id"))
+	err := a.updateMatchWithTx(c, id, claims, func(tx *sql.Tx, row matchRow) error {
+		if row.Status == matchStatusFinished || row.Status == matchStatusCancelled {
+			return fmt.Errorf("current status cannot cancel")
+		}
+		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusCancelled, row.ID); err != nil {
+			return err
+		}
+		return insertMatchEventTx(c.Request.Context(), tx, row.ID, claims.UserID, "match_cancelled", gin.H{"previousStatus": row.Status})
 	})
 	if err != nil {
 		a.handleMatchError(c, err)

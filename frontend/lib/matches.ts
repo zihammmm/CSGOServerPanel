@@ -51,5 +51,8 @@ export const launchMatch = (...args: Parameters<typeof mock.launchMatch>): Retur
 export const forceStartMatch = (...args: Parameters<typeof mock.forceStartMatch>): ReturnType<typeof mock.forceStartMatch> =>
   (useMock ? mock.forceStartMatch : api.forceStartMatch)(...args);
 
+export const cancelMatch = (...args: Parameters<typeof mock.cancelMatch>): ReturnType<typeof mock.cancelMatch> =>
+  (useMock ? mock.cancelMatch : api.cancelMatch)(...args);
+
 export const finishMatch = (...args: Parameters<typeof mock.finishMatch>): ReturnType<typeof mock.finishMatch> =>
   (useMock ? mock.finishMatch : api.finishMatch)(...args);

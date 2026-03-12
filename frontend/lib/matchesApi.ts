@@ -72,6 +72,13 @@ export async function forceStartMatch(id: string, _actorUserId: number, _actorRo
   });
 }
 
+export async function cancelMatch(id: string, _actorUserId: number): Promise<MatchDetail> {
+  return apiFetch<MatchDetail>(`/api/v1/admin/matches/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function finishMatch(id: string, _actorUserId: number): Promise<MatchDetail> {
   return apiFetch<MatchDetail>(`/api/v1/admin/matches/${id}/finish`, {
     method: "POST",

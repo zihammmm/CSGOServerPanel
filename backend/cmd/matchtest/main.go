@@ -101,6 +101,10 @@ func main() {
 		if err := runPrepareUsers(os.Args[2:]); err != nil {
 			fatal(err)
 		}
+	case "fill-room":
+		if err := runFillRoom(os.Args[2:]); err != nil {
+			fatal(err)
+		}
 	case "run-flow":
 		if err := runFlow(os.Args[2:]); err != nil {
 			fatal(err)
@@ -118,6 +122,7 @@ func main() {
 func printUsage() {
 	fmt.Println("matchtest commands:")
 	fmt.Println("  prepare-users  Create deterministic E2E users and print tokens")
+	fmt.Println("  fill-room      Add E2E bot players into the active gathering match")
 	fmt.Println("  run-flow       Run an end-to-end match flow against the real API")
 	fmt.Println("  cleanup        Remove E2E users and their related matches")
 }
@@ -339,6 +344,88 @@ func runFlow(args []string) error {
 	return nil
 }
 
+func runFillRoom(args []string) error {
+	fs := flag.NewFlagSet("fill-room", flag.ExitOnError)
+	dbURL := fs.String("database-url", envOrDefault("DATABASE_URL", defaultDBURL), "PostgreSQL DSN")
+	count := fs.Int("count", 8, "how many E2E bot players to add")
+	matchID := fs.String("match-id", "", "optional display_id; defaults to the current active gathering match")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *count <= 0 {
+		return fmt.Errorf("count must be greater than 0")
+	}
+
+	db, err := openDB(*dbURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	matchRow, err := findTargetMatch(tx, *matchID)
+	if err != nil {
+		return err
+	}
+	if matchRow.status != "gathering" {
+		return fmt.Errorf("target match %s is not in gathering status", matchRow.displayID)
+	}
+
+	var currentCount int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM match_players WHERE match_id = $1`, matchRow.id).Scan(&currentCount); err != nil {
+		return err
+	}
+	if currentCount >= 10 {
+		return fmt.Errorf("target match %s is already full", matchRow.displayID)
+	}
+	if currentCount+*count > 10 {
+		return fmt.Errorf("cannot add %d players: current room has %d players, max is 10", *count, currentCount)
+	}
+
+	for i := 0; i < *count; i++ {
+		seq := i + 1
+		steamID := fmt.Sprintf("e2e_bot_%s_%02d", matchRow.displayID, seq)
+		nickname := fmt.Sprintf("E2E-BOT-%02d", seq)
+		var userID int64
+		if err := tx.QueryRow(`
+			INSERT INTO users (steam_id, role, nickname, nickname_customized)
+			VALUES ($1, 'guest', $2, FALSE)
+			ON CONFLICT (steam_id) DO UPDATE
+			SET nickname = EXCLUDED.nickname,
+				nickname_customized = FALSE,
+				updated_at = NOW()
+			RETURNING id
+		`, steamID, nickname).Scan(&userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO player_stats (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO match_players (match_id, user_id, team, is_captain, join_order)
+			VALUES ($1, $2, NULL, FALSE, $3)
+			ON CONFLICT (match_id, user_id) DO NOTHING
+		`, matchRow.id, userID, currentCount+i+1); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`UPDATE matches SET updated_at = NOW() WHERE id = $1`, matchRow.id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	logStep("added %d E2E bots into match %s; room count is now %d/10", *count, matchRow.displayID, currentCount+*count)
+	return nil
+}
+
 func runCleanup(args []string) error {
 	fs := flag.NewFlagSet("cleanup", flag.ExitOnError)
 	dbURL := fs.String("database-url", envOrDefault("DATABASE_URL", defaultDBURL), "PostgreSQL DSN")
@@ -379,6 +466,12 @@ func runCleanup(args []string) error {
 	}
 	logStep("cleaned up E2E matches and users")
 	return nil
+}
+
+type dbMatchRow struct {
+	id        int64
+	displayID string
+	status    string
 }
 
 func openDB(dbURL string) (*sql.DB, error) {
@@ -438,6 +531,33 @@ func prepareUsers(db *sql.DB, jwtSecret string) ([]testUser, error) {
 		users = append(users, user)
 	}
 	return users, nil
+}
+
+func findTargetMatch(tx *sql.Tx, displayID string) (dbMatchRow, error) {
+	var row dbMatchRow
+	var err error
+	if strings.TrimSpace(displayID) != "" {
+		err = tx.QueryRow(`
+			SELECT id, display_id, status
+			FROM matches
+			WHERE display_id = $1
+		`, strings.TrimSpace(displayID)).Scan(&row.id, &row.displayID, &row.status)
+	} else {
+		err = tx.QueryRow(`
+			SELECT id, display_id, status
+			FROM matches
+			WHERE status = 'gathering'
+			ORDER BY created_at DESC
+			LIMIT 1
+		`).Scan(&row.id, &row.displayID, &row.status)
+	}
+	if err == sql.ErrNoRows {
+		if strings.TrimSpace(displayID) != "" {
+			return dbMatchRow{}, fmt.Errorf("match %s not found", displayID)
+		}
+		return dbMatchRow{}, fmt.Errorf("no active gathering match found")
+	}
+	return row, err
 }
 
 func signToken(jwtSecret string, user testUser) (string, error) {

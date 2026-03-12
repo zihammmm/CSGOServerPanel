@@ -678,6 +678,19 @@ export async function forceStartMatch(id: string, actorUserId: number, actorRole
   return cloneMatch(match);
 }
 
+export async function cancelMatch(id: string, actorUserId: number): Promise<MatchDetail> {
+  const match = getMatchById(id);
+  if (match.creatorUserId !== actorUserId) {
+    throw new Error("仅创建者可取消比赛");
+  }
+  if (match.status === "finished" || match.status === "cancelled") {
+    throw new Error("当前阶段不可取消比赛");
+  }
+  match.status = "cancelled";
+  match.updatedAt = nowISO();
+  return cloneMatch(match);
+}
+
 export async function finishMatch(id: string, actorUserId: number): Promise<MatchDetail> {
   const match = getMatchById(id);
   if (match.creatorUserId !== actorUserId) {

@@ -8,6 +8,7 @@ import {
   MatchDetail,
   MatchPlayer,
   assignCaptains,
+  cancelMatch,
   draftPick,
   finishMatch,
   forceStartMatch,
@@ -62,6 +63,7 @@ export default function MatchDetailPage() {
   const [scoreTab, setScoreTab] = useState<string>("overall");
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showForceStartModal, setShowForceStartModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   const isAdmin = useMemo(() => me?.role === "admin", [me]);
   const players = match?.players ?? [];
@@ -221,6 +223,11 @@ export default function MatchDetailPage() {
     run(() => finishMatch(matchId, me.id));
   };
 
+  const doCancel = () => {
+    if (!me) return;
+    run(() => cancelMatch(matchId, me.id));
+  };
+
   const doForceStart = () => {
     if (!me) return;
     run(() => forceStartMatch(matchId, me.id, me.role));
@@ -261,6 +268,11 @@ export default function MatchDetailPage() {
             </div>
           ))}
         </div>
+        {isAdmin && !["finished", "cancelled"].includes(match.status) && (
+          <p className="row-actions">
+            <button className="button secondary" onClick={() => setShowCancelModal(true)}>取消比赛</button>
+          </p>
+        )}
       </section>
 
       <section className="panel">
@@ -538,6 +550,27 @@ export default function MatchDetailPage() {
                 }}
               >
                 确认强制开启
+              </button>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showCancelModal && (
+        <div className="logout-modal-backdrop" onClick={() => setShowCancelModal(false)}>
+          <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>确认取消比赛</h3>
+            <p className="muted">取消后该比赛会进入历史记录，无法继续报名、选人或开赛。</p>
+            <p className="row-actions">
+              <button className="button secondary" onClick={() => setShowCancelModal(false)}>返回</button>
+              <button
+                className="button"
+                onClick={() => {
+                  setShowCancelModal(false);
+                  doCancel();
+                }}
+              >
+                确认取消
               </button>
             </p>
           </div>
