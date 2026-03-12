@@ -63,12 +63,13 @@ function formatModeName(mode: string): string {
 export default function DashboardPage() {
   const [me, setMe] = useState<CurrentUser | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [actionModal, setActionModal] = useState<{ title: string; message: string } | null>(null);
+  const [kickModal, setKickModal] = useState<{ playerId: string; playerName: string } | null>(null);
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [live, setLive] = useState<MatchLive | null>(null);
   const [audit, setAudit] = useState<AuditItem[]>([]);
   const [mapName, setMapName] = useState("de_mirage");
   const [mode, setMode] = useState("competitive");
-  const [kickPlayer, setKickPlayer] = useState("");
   const [kickReason, setKickReason] = useState("");
   const [error, setError] = useState("");
 
@@ -147,9 +148,35 @@ export default function DashboardPage() {
       await apiFetch(path, { method: "POST", body: JSON.stringify(body) });
       const res = await apiFetch<{ items: AuditItem[] }>("/api/v1/admin/audit-logs");
       setAudit(res.items);
+      if (path === "/api/v1/admin/rcon/change-map") {
+        setActionModal({ title: "切换地图成功", message: `地图已切换为 ${formatMapName((body as { map?: string }).map || "")}。` });
+      } else if (path === "/api/v1/admin/rcon/change-mode") {
+        setActionModal({ title: "切换模式成功", message: `模式已切换为 ${formatModeName((body as { mode?: string }).mode || "")}。` });
+      } else if (path === "/api/v1/admin/rcon/kick") {
+        const target = (body as { player?: string }).player || "";
+        setActionModal({ title: "踢人成功", message: `玩家 ${target} 已被踢出服务器。` });
+      }
     } catch (e) {
-      setError(String(e));
+      const message = String(e);
+      setError(message);
+      if (path === "/api/v1/admin/rcon/change-map") {
+        setActionModal({ title: "切换地图失败", message });
+      } else if (path === "/api/v1/admin/rcon/change-mode") {
+        setActionModal({ title: "切换模式失败", message });
+      } else if (path === "/api/v1/admin/rcon/kick") {
+        setActionModal({ title: "踢人失败", message });
+      }
     }
+  };
+
+  const confirmKick = async () => {
+    if (!kickModal) return;
+    await runAdminAction("/api/v1/admin/rcon/kick", {
+      player: kickModal.playerId,
+      reason: kickReason,
+    });
+    setKickModal(null);
+    setKickReason("");
   };
 
   return (
@@ -201,6 +228,7 @@ export default function DashboardPage() {
                     <th>D</th>
                     <th>KD</th>
                     <th>队伍</th>
+                    {isAdmin && <th>操作</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -212,6 +240,19 @@ export default function DashboardPage() {
                       <td>{p.deaths}</td>
                       <td>{p.kd.toFixed(2)}</td>
                       <td>{p.team}</td>
+                      {isAdmin && (
+                        <td>
+                          <button
+                            className="button danger"
+                            onClick={() => {
+                              setKickModal({ playerId: p.playerId, playerName: p.name });
+                              setKickReason("");
+                            }}
+                          >
+                            踢人
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -226,19 +267,6 @@ export default function DashboardPage() {
           <section className="panel">
             <h3>管理员操作</h3>
             <div className="grid grid-2">
-              <div>
-                <h4>踢人</h4>
-                <input placeholder="player id" value={kickPlayer} onChange={(e) => setKickPlayer(e.target.value)} />
-                <input placeholder="reason" value={kickReason} onChange={(e) => setKickReason(e.target.value)} />
-                <p>
-                  <button
-                    className="button danger"
-                    onClick={() => runAdminAction("/api/v1/admin/rcon/kick", { player: kickPlayer, reason: kickReason })}
-                  >
-                    执行踢人
-                  </button>
-                </p>
-              </div>
               <div>
                 <h4>切换地图 / 模式</h4>
                 <select value={mapName} onChange={(e) => setMapName(e.target.value)}>
@@ -307,6 +335,37 @@ export default function DashboardPage() {
             <button className="button" onClick={() => setShowLogoutModal(false)}>
               确定
             </button>
+          </div>
+        </div>
+      )}
+      {actionModal && (
+        <div className="logout-modal-backdrop" onClick={() => setActionModal(null)}>
+          <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{actionModal.title}</h3>
+            <p className="muted">{actionModal.message}</p>
+            <button className="button" onClick={() => setActionModal(null)}>
+              确定
+            </button>
+          </div>
+        </div>
+      )}
+      {kickModal && (
+        <div className="logout-modal-backdrop" onClick={() => setKickModal(null)}>
+          <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>确认踢出玩家</h3>
+            <p className="muted">玩家：{kickModal.playerName}（{kickModal.playerId}）</p>
+            <label>
+              理由
+              <input value={kickReason} onChange={(e) => setKickReason(e.target.value)} placeholder="请输入踢人理由" />
+            </label>
+            <p className="row-actions">
+              <button className="button secondary" onClick={() => setKickModal(null)}>
+                取消
+              </button>
+              <button className="button danger" onClick={confirmKick}>
+                确认踢人
+              </button>
+            </p>
           </div>
         </div>
       )}

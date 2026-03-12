@@ -647,6 +647,13 @@ func (a *App) getUserByID(userID int64) (User, error) {
 	return u, err
 }
 
+func (a *App) getUserBySteamID(steamID string) (User, error) {
+	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname FROM users WHERE steam_id = $1`, steamID)
+	var u User
+	err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname)
+	return u, err
+}
+
 func (a *App) listAdmins(c *gin.Context) {
 	rows, err := a.db.Query(`
 		SELECT id, steam_id, role, nickname
@@ -688,7 +695,15 @@ func (a *App) addAdmin(c *gin.Context) {
 	}
 	nickname := strings.TrimSpace(req.Nickname)
 	if nickname == "" {
-		nickname = "Player-" + steamID[max(0, len(steamID)-6):]
+		existingUser, err := a.getUserBySteamID(steamID)
+		if err == nil && strings.TrimSpace(existingUser.Nickname) != "" {
+			nickname = existingUser.Nickname
+		} else if err != nil && err != sql.ErrNoRows {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query existing user"})
+			return
+		} else {
+			nickname = "Player-" + steamID[max(0, len(steamID)-6):]
+		}
 	}
 	user, err := a.upsertUser(steamID, nickname, true)
 	if err != nil {
