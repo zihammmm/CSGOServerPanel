@@ -13,6 +13,7 @@ export type {
   MatchSummary,
   MatchPlayerStat,
   MatchMapResult,
+  PickedMapDetail,
   MatchDetail,
 } from "./matchesMock";
 

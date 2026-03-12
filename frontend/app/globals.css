@@ -401,6 +401,49 @@ td {
   box-shadow: 0 0 0 1px rgba(255, 220, 120, 0.28), 0 14px 30px rgba(216, 154, 31, 0.32);
 }
 
+.button.match-launch-ready {
+  background: linear-gradient(135deg, #95ffd1, #31c983);
+  color: #042019;
+  border-color: rgba(153, 255, 209, 0.78);
+  box-shadow: 0 0 0 1px rgba(153, 255, 209, 0.3), 0 0 18px rgba(85, 232, 160, 0.35), 0 12px 28px rgba(37, 154, 108, 0.28);
+}
+
+.button.match-launch-ready:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px rgba(153, 255, 209, 0.4), 0 0 24px rgba(85, 232, 160, 0.45), 0 14px 32px rgba(37, 154, 108, 0.35);
+}
+
+.team-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.team-panel {
+  border-radius: 14px;
+  border: 1px solid #2e3b53;
+  padding: 14px 16px;
+  backdrop-filter: blur(4px);
+}
+
+.team-panel h4 {
+  margin: 0 0 10px;
+}
+
+.team-panel ul {
+  margin: 0;
+}
+
+.team-panel-a {
+  background: linear-gradient(180deg, rgba(255, 201, 211, 0.16), rgba(255, 229, 234, 0.08));
+  border-color: rgba(255, 170, 188, 0.38);
+}
+
+.team-panel-b {
+  background: linear-gradient(180deg, rgba(181, 220, 255, 0.16), rgba(214, 234, 255, 0.08));
+  border-color: rgba(144, 196, 255, 0.38);
+}
+
 .pick-grid,
 .map-pool {
   display: grid;
@@ -471,6 +514,10 @@ ul {
 
   .content {
     overflow: visible;
+  }
+
+  .team-panels {
+    grid-template-columns: 1fr;
   }
 
   .dashboard-live-grid {

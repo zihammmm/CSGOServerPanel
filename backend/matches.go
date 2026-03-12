@@ -28,6 +28,7 @@ const (
 	matchStatusLive         = "live"
 	matchStatusFinished     = "finished"
 	matchStatusCancelled    = "cancelled"
+	turnTimeout             = 30 * time.Second
 )
 
 var (
@@ -92,6 +93,12 @@ type mapResultItem struct {
 	ScoreA      int                 `json:"scoreA"`
 	ScoreB      int                 `json:"scoreB"`
 	PlayerStats []mapPlayerStatItem `json:"playerStats"`
+}
+
+type pickedMapDetail struct {
+	Map          string `json:"map"`
+	PickedByTeam string `json:"pickedByTeam,omitempty"`
+	StartSide    string `json:"startSide,omitempty"`
 }
 
 func (a *App) registerMatchRoutes(authed *gin.RouterGroup, admin *gin.RouterGroup) {
@@ -176,7 +183,7 @@ func (a *App) listMatches(c *gin.Context) {
 
 func (a *App) getMatchDetail(c *gin.Context) {
 	matchID := strings.TrimSpace(c.Param("id"))
-	row, err := a.getMatchByDisplayID(c.Request.Context(), matchID)
+	row, players, steps, mapsPool, pickedMaps, bannedMaps, draftTurnIndex, vetoScript, vetoTurnIndex, pickedMapDetails, mapResults, overallStats, err := a.loadMatchDetailPayload(c.Request.Context(), matchID)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "match not found"})
 		return
@@ -186,17 +193,71 @@ func (a *App) getMatchDetail(c *gin.Context) {
 		return
 	}
 
-	players, err := a.getMatchPlayers(c.Request.Context(), row.ID)
+	c.JSON(http.StatusOK, gin.H{
+		"id":               row.DisplayID,
+		"title":            matchTitle(row.Bo, row.CreatedAt),
+		"status":           row.Status,
+		"bo":               row.Bo,
+		"captainMode":      row.CaptainMode,
+		"creatorName":      row.CreatorName,
+		"creatorUserId":    row.CreatorUser,
+		"createdAt":        row.CreatedAt.UTC().Format(time.RFC3339),
+		"updatedAt":        row.UpdatedAt.UTC().Format(time.RFC3339),
+		"serverAddr":       row.ServerAddr,
+		"scoreA":           toIntPtr(row.ScoreA),
+		"scoreB":           toIntPtr(row.ScoreB),
+		"players":          players,
+		"mapsPool":         mapsPool,
+		"pickedMaps":       pickedMaps,
+		"pickedMapDetails": pickedMapDetails,
+		"bannedMaps":       bannedMaps,
+		"vetoSteps":        steps,
+		"draftTurns":       draftTurnScript,
+		"draftTurnIndex":   draftTurnIndex,
+		"vetoScript":       vetoScript,
+		"vetoTurnIndex":    vetoTurnIndex,
+		"playerStats":      overallStats,
+		"mapResults":       mapResults,
+	})
+}
+
+func (a *App) loadMatchDetailPayload(ctx context.Context, displayID string) (matchRow, []matchPlayerItem, []vetoStepItem, []string, []string, []string, int, []vetoTurn, int, []pickedMapDetail, []mapResultItem, []mapPlayerStatItem, error) {
+	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query players"})
-		return
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
 	}
-	steps, err := a.getVetoSteps(c.Request.Context(), row.ID)
+	defer tx.Rollback()
+
+	row, err := getMatchByDisplayIDTx(ctx, tx, displayID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query veto steps"})
-		return
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+	}
+	row, err = advanceAutomationsTx(ctx, tx, row)
+	if err != nil {
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+	}
+
+	players, err := getMatchPlayersTx(ctx, tx, row.ID)
+	if err != nil {
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+	}
+	steps, err := getVetoStepsTx(ctx, tx, row.ID)
+	if err != nil {
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
 	}
 	mapsPool, pickedMaps, bannedMaps := computeMapState(row.Bo, row.Status, steps)
+	draftTurnIndex, _ := computeDraftState(players)
+	vetoScript := buildVetoScript(row.Bo)
+	vetoTurnIndex := len(steps)
+	pickedMapDetails := buildPickedMapDetails(row.Bo, row.Status, steps)
+	mapResults, overallStats, err := getMatchResultsTx(ctx, tx, row.ID)
+	if err != nil {
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+	}
 	if mapsPool == nil {
 		mapsPool = []string{}
 	}
@@ -206,41 +267,7 @@ func (a *App) getMatchDetail(c *gin.Context) {
 	if bannedMaps == nil {
 		bannedMaps = []string{}
 	}
-	draftTurnIndex, _ := computeDraftState(players)
-	vetoScript := buildVetoScript(row.Bo)
-	vetoTurnIndex := len(steps)
-
-	mapResults, overallStats, err := a.getMatchResults(c.Request.Context(), row.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query match results"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"id":             row.DisplayID,
-		"title":          matchTitle(row.Bo, row.CreatedAt),
-		"status":         row.Status,
-		"bo":             row.Bo,
-		"captainMode":    row.CaptainMode,
-		"creatorName":    row.CreatorName,
-		"creatorUserId":  row.CreatorUser,
-		"createdAt":      row.CreatedAt.UTC().Format(time.RFC3339),
-		"updatedAt":      row.UpdatedAt.UTC().Format(time.RFC3339),
-		"serverAddr":     row.ServerAddr,
-		"scoreA":         toIntPtr(row.ScoreA),
-		"scoreB":         toIntPtr(row.ScoreB),
-		"players":        players,
-		"mapsPool":       mapsPool,
-		"pickedMaps":     pickedMaps,
-		"bannedMaps":     bannedMaps,
-		"vetoSteps":      steps,
-		"draftTurns":     draftTurnScript,
-		"draftTurnIndex": draftTurnIndex,
-		"vetoScript":     vetoScript,
-		"vetoTurnIndex":  vetoTurnIndex,
-		"playerStats":    overallStats,
-		"mapResults":     mapResults,
-	})
+	return row, players, steps, mapsPool, pickedMaps, bannedMaps, draftTurnIndex, vetoScript, vetoTurnIndex, pickedMapDetails, mapResults, overallStats, nil
 }
 
 func (a *App) adminCreateMatch(c *gin.Context) {
@@ -579,7 +606,12 @@ func (a *App) adminDraftPick(c *gin.Context) {
 		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET updated_at = NOW() WHERE id = $1`, row.ID); err != nil {
 			return err
 		}
-		return nil
+		nextRow, err := getMatchByDisplayIDTx(c.Request.Context(), tx, row.DisplayID)
+		if err != nil {
+			return err
+		}
+		_, err = advanceAutomationsTx(c.Request.Context(), tx, nextRow)
+		return err
 	})
 	if err != nil {
 		a.handleMatchError(c, err)
@@ -693,7 +725,7 @@ func (a *App) adminLaunchMatch(c *gin.Context) {
 		if len(pickedMaps) == 0 {
 			pickedMaps = []string{"de_mirage"}
 		}
-		cfgJSON, err := buildGet5Config(row, players, pickedMaps)
+		cfgJSON, err := buildGet5Config(row, players, pickedMaps, buildPickedMapDetails(row.Bo, row.Status, steps))
 		if err != nil {
 			return err
 		}
@@ -814,6 +846,10 @@ func (a *App) updateMatchWithTx(c *gin.Context, displayID string, claims *Claims
 	defer tx.Rollback()
 
 	row, err := getMatchByDisplayIDTx(c.Request.Context(), tx, displayID)
+	if err != nil {
+		return err
+	}
+	row, err = advanceAutomationsTx(c.Request.Context(), tx, row)
 	if err != nil {
 		return err
 	}
@@ -996,7 +1032,11 @@ func getVetoStepsTx(ctx context.Context, q dbQueryer, matchID int64) ([]vetoStep
 }
 
 func (a *App) getMatchResults(ctx context.Context, matchID int64) ([]mapResultItem, []mapPlayerStatItem, error) {
-	rows, err := a.db.QueryContext(ctx, `
+	return getMatchResultsTx(ctx, a.db, matchID)
+}
+
+func getMatchResultsTx(ctx context.Context, q dbQueryer, matchID int64) ([]mapResultItem, []mapPlayerStatItem, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT id, map_order, map_name, score_a, score_b
 		FROM match_map_results
 		WHERE match_id = $1
@@ -1020,7 +1060,7 @@ func (a *App) getMatchResults(ctx context.Context, matchID int64) ([]mapResultIt
 		}
 		mr.Key = fmt.Sprintf("map_%d_%s", order-1, mr.Map)
 
-		statsRows, err := a.db.QueryContext(ctx, `
+		statsRows, err := q.QueryContext(ctx, `
 			SELECT s.user_id, u.steam_id, u.nickname, s.team, s.kills, s.deaths, s.assists, s.adr, s.rating
 			FROM match_player_map_stats s
 			JOIN users u ON u.id = s.user_id
@@ -1075,6 +1115,136 @@ func (a *App) getMatchResults(ctx context.Context, matchID int64) ([]mapResultIt
 	return mapResults, overall, nil
 }
 
+func advanceAutomationsTx(ctx context.Context, tx *sql.Tx, row matchRow) (matchRow, error) {
+	for {
+		next, changed, err := advanceAutomationStepTx(ctx, tx, row)
+		if err != nil {
+			return matchRow{}, err
+		}
+		row = next
+		if !changed {
+			return row, nil
+		}
+	}
+}
+
+func advanceAutomationStepTx(ctx context.Context, tx *sql.Tx, row matchRow) (matchRow, bool, error) {
+	switch row.Status {
+	case matchStatusPlayerDraft:
+		players, err := getMatchPlayersTx(ctx, tx, row.ID)
+		if err != nil {
+			return matchRow{}, false, err
+		}
+		idx, team := computeDraftState(players)
+		if idx >= len(draftTurnScript) {
+			if _, err := tx.ExecContext(ctx, `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusMapVeto, row.ID); err != nil {
+				return matchRow{}, false, err
+			}
+			if err := insertMatchEventTx(ctx, tx, row.ID, nil, "draft_finished", gin.H{"reason": "auto_finalize"}); err != nil {
+				return matchRow{}, false, err
+			}
+			next, err := getMatchByDisplayIDTx(ctx, tx, row.DisplayID)
+			return next, true, err
+		}
+
+		unassigned := findUnassignedPlayers(players)
+		if len(unassigned) == 1 {
+			target := unassigned[0]
+			if _, err := tx.ExecContext(ctx, `UPDATE match_players SET team = $1 WHERE match_id = $2 AND user_id = $3`, team, row.ID, target.UserID); err != nil {
+				return matchRow{}, false, err
+			}
+			if err := insertMatchEventTx(ctx, tx, row.ID, nil, "draft_auto_pick", gin.H{"team": team, "targetUserId": target.UserID, "turn": idx, "reason": "last_player"}); err != nil {
+				return matchRow{}, false, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE matches SET updated_at = NOW() WHERE id = $1`, row.ID); err != nil {
+				return matchRow{}, false, err
+			}
+			next, err := getMatchByDisplayIDTx(ctx, tx, row.DisplayID)
+			return next, true, err
+		}
+		if time.Since(row.UpdatedAt) < turnTimeout {
+			return row, false, nil
+		}
+		if len(unassigned) == 0 {
+			return row, false, nil
+		}
+		target := unassigned[rand.Intn(len(unassigned))]
+		if _, err := tx.ExecContext(ctx, `UPDATE match_players SET team = $1 WHERE match_id = $2 AND user_id = $3`, team, row.ID, target.UserID); err != nil {
+			return matchRow{}, false, err
+		}
+		if err := insertMatchEventTx(ctx, tx, row.ID, nil, "draft_auto_pick", gin.H{"team": team, "targetUserId": target.UserID, "turn": idx, "reason": "timeout"}); err != nil {
+			return matchRow{}, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE matches SET updated_at = NOW() WHERE id = $1`, row.ID); err != nil {
+			return matchRow{}, false, err
+		}
+		next, err := getMatchByDisplayIDTx(ctx, tx, row.DisplayID)
+		return next, true, err
+	case matchStatusMapVeto:
+		steps, err := getVetoStepsTx(ctx, tx, row.ID)
+		if err != nil {
+			return matchRow{}, false, err
+		}
+		script := buildVetoScript(row.Bo)
+		if len(steps) >= len(script) {
+			return row, false, nil
+		}
+		if time.Since(row.UpdatedAt) < turnTimeout {
+			return row, false, nil
+		}
+		mapsPool, _, _ := computeMapState(row.Bo, row.Status, steps)
+		if len(mapsPool) == 0 {
+			return row, false, nil
+		}
+		turn := script[len(steps)]
+		mapName := mapsPool[rand.Intn(len(mapsPool))]
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO match_veto_steps (match_id, step_order, team, action, map_name)
+			VALUES ($1, $2, $3, $4, $5)
+		`, row.ID, len(steps)+1, turn.Team, turn.Action, mapName); err != nil {
+			return matchRow{}, false, err
+		}
+		if err := insertMatchEventTx(ctx, tx, row.ID, nil, "veto_auto_action", gin.H{"order": len(steps) + 1, "team": turn.Team, "action": turn.Action, "map": mapName, "reason": "timeout"}); err != nil {
+			return matchRow{}, false, err
+		}
+		if len(steps)+1 >= len(script) {
+			latestSteps, err := getVetoStepsTx(ctx, tx, row.ID)
+			if err != nil {
+				return matchRow{}, false, err
+			}
+			_, picked, _ := computeMapState(row.Bo, matchStatusReadyToStart, latestSteps)
+			payload, _ := json.Marshal(gin.H{"pickedMaps": picked})
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO match_events (match_id, actor_user_id, event_type, payload)
+				VALUES ($1, $2, 'veto_finalized', $3)
+			`, row.ID, nil, payload); err != nil {
+				return matchRow{}, false, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusReadyToStart, row.ID); err != nil {
+				return matchRow{}, false, err
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, `UPDATE matches SET updated_at = NOW() WHERE id = $1`, row.ID); err != nil {
+				return matchRow{}, false, err
+			}
+		}
+		next, err := getMatchByDisplayIDTx(ctx, tx, row.DisplayID)
+		return next, true, err
+	default:
+		return row, false, nil
+	}
+}
+
+func findUnassignedPlayers(players []matchPlayerItem) []matchPlayerItem {
+	items := make([]matchPlayerItem, 0, len(players))
+	for _, player := range players {
+		if player.Team == nil && !player.IsCaptain {
+			items = append(items, player)
+		}
+	}
+	return items
+}
+
 func computeDraftState(players []matchPlayerItem) (int, string) {
 	countA, countB := 0, 0
 	for _, p := range players {
@@ -1109,6 +1279,33 @@ func buildVetoScript(bo int) []vetoTurn {
 		return []vetoTurn{{"A", "ban"}, {"B", "ban"}, {"A", "pick"}, {"B", "pick"}, {"A", "ban"}, {"B", "ban"}}
 	}
 	return []vetoTurn{{"A", "ban"}, {"B", "ban"}}
+}
+
+func buildPickedMapDetails(bo int, status string, steps []vetoStepItem) []pickedMapDetail {
+	_, pickedMaps, _ := computeMapState(bo, status, steps)
+	if len(pickedMaps) == 0 {
+		return []pickedMapDetail{}
+	}
+	pickTeamByMap := map[string]string{}
+	for _, step := range steps {
+		if step.Action == "pick" {
+			pickTeamByMap[step.Map] = step.Team
+		}
+	}
+	details := make([]pickedMapDetail, 0, len(pickedMaps))
+	for _, mapName := range pickedMaps {
+		team := pickTeamByMap[mapName]
+		side := ""
+		if team != "" {
+			side = "T"
+		}
+		details = append(details, pickedMapDetail{
+			Map:          mapName,
+			PickedByTeam: team,
+			StartSide:    side,
+		})
+	}
+	return details
 }
 
 func computeMapState(bo int, status string, steps []vetoStepItem) (mapsPool []string, picked []string, banned []string) {
@@ -1182,7 +1379,7 @@ func (a *App) writeMatchEventAsync(displayID string, actorUserID int64, eventTyp
 	`, match.ID, actorUserID, eventType, data)
 }
 
-func buildGet5Config(m matchRow, players []matchPlayerItem, maps []string) ([]byte, error) {
+func buildGet5Config(m matchRow, players []matchPlayerItem, maps []string, pickedMapDetails []pickedMapDetail) ([]byte, error) {
 	teamA := make([]gin.H, 0, 5)
 	teamB := make([]gin.H, 0, 5)
 	for _, p := range players {
@@ -1197,13 +1394,14 @@ func buildGet5Config(m matchRow, players []matchPlayerItem, maps []string) ([]by
 		}
 	}
 	payload := gin.H{
-		"matchId":     m.DisplayID,
-		"bo":          m.Bo,
-		"maplist":     maps,
-		"teamA":       teamA,
-		"teamB":       teamB,
-		"server":      m.ServerAddr,
-		"generatedAt": time.Now().UTC().Format(time.RFC3339),
+		"matchId":          m.DisplayID,
+		"bo":               m.Bo,
+		"maplist":          maps,
+		"pickedMapDetails": pickedMapDetails,
+		"teamA":            teamA,
+		"teamB":            teamB,
+		"server":           m.ServerAddr,
+		"generatedAt":      time.Now().UTC().Format(time.RFC3339),
 	}
 	return json.Marshal(payload)
 }

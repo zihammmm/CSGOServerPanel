@@ -67,6 +67,12 @@ export type MatchMapResult = {
   playerStats: MatchPlayerStat[];
 };
 
+export type PickedMapDetail = {
+  map: string;
+  pickedByTeam?: TeamSide;
+  startSide?: "T";
+};
+
 export type MatchDetail = Omit<MatchSummary, "playerCount"> & {
   creatorUserId: number;
   serverAddr: string;
@@ -75,6 +81,7 @@ export type MatchDetail = Omit<MatchSummary, "playerCount"> & {
   mapResults: MatchMapResult[];
   mapsPool: string[];
   pickedMaps: string[];
+  pickedMapDetails: PickedMapDetail[];
   bannedMaps: string[];
   vetoSteps: VetoStep[];
   draftTurns: TeamSide[];
@@ -94,6 +101,7 @@ const DEFAULT_MAPS = [
   "de_nuke",
   "de_train",
 ];
+const TURN_TIMEOUT_MS = 30_000;
 
 const draftTurns: TeamSide[] = ["A", "B", "B", "A", "A", "B", "B", "A"];
 
@@ -183,6 +191,7 @@ function createDetail(creator: MatchUser, bo: BoType, captainMode: CaptainMode):
     mapResults: [],
     mapsPool: [...DEFAULT_MAPS],
     pickedMaps: [],
+    pickedMapDetails: [],
     bannedMaps: [],
     vetoSteps: [],
     draftTurns: [...draftTurns],
@@ -234,6 +243,71 @@ function ensureDraftFinished(match: MatchDetail): void {
   }
 }
 
+function getUnassigned(match: MatchDetail): MatchPlayer[] {
+  return match.players.filter((player) => !player.team && !player.isCaptain);
+}
+
+function autoAdvanceDraft(match: MatchDetail): boolean {
+  if (match.status !== "player_draft") return false;
+  const currentTeam = match.draftTurns[match.draftTurnIndex];
+  const unassigned = getUnassigned(match);
+  if (unassigned.length === 0) {
+    ensureDraftFinished(match);
+    return true;
+  }
+  if (unassigned.length === 1) {
+    unassigned[0].team = currentTeam;
+    match.draftTurnIndex += 1;
+    match.updatedAt = nowISO();
+    ensureDraftFinished(match);
+    return true;
+  }
+  if (Date.now() - new Date(match.updatedAt).getTime() < TURN_TIMEOUT_MS) return false;
+  const picked = unassigned[Math.floor(Math.random() * unassigned.length)];
+  picked.team = currentTeam;
+  match.draftTurnIndex += 1;
+  match.updatedAt = nowISO();
+  ensureDraftFinished(match);
+  return true;
+}
+
+function autoAdvanceVeto(match: MatchDetail): boolean {
+  if (match.status !== "map_veto") return false;
+  if (match.vetoTurnIndex >= match.vetoScript.length) {
+    finalizeVeto(match);
+    return true;
+  }
+  if (Date.now() - new Date(match.updatedAt).getTime() < TURN_TIMEOUT_MS) return false;
+  if (match.mapsPool.length === 0) return false;
+  const mapName = match.mapsPool[Math.floor(Math.random() * match.mapsPool.length)];
+  const turn = match.vetoScript[match.vetoTurnIndex];
+  if (turn.action === "ban") {
+    match.bannedMaps.push(mapName);
+  } else {
+    match.pickedMaps.push(mapName);
+  }
+  match.vetoSteps.push({
+    order: match.vetoSteps.length + 1,
+    team: turn.team,
+    action: turn.action,
+    map: mapName,
+  });
+  match.mapsPool = match.mapsPool.filter((m) => m !== mapName);
+  match.vetoTurnIndex += 1;
+  match.updatedAt = nowISO();
+  if (match.vetoTurnIndex >= match.vetoScript.length) {
+    finalizeVeto(match);
+  }
+  return true;
+}
+
+function advanceAutomation(match: MatchDetail): void {
+  for (;;) {
+    const changed = autoAdvanceDraft(match) || autoAdvanceVeto(match);
+    if (!changed) break;
+  }
+}
+
 function finalizeVeto(match: MatchDetail): void {
   if (match.bo === 1) {
     const decider = match.mapsPool[0];
@@ -248,6 +322,10 @@ function finalizeVeto(match: MatchDetail): void {
   }
   match.status = "ready_to_start";
   match.updatedAt = nowISO();
+  match.pickedMapDetails = match.pickedMaps.map((map) => {
+    const step = match.vetoSteps.find((item) => item.action === "pick" && item.map === map);
+    return { map, pickedByTeam: step?.team, startSide: step ? "T" : undefined };
+  });
 }
 
 function validateSingleActive(newStatus: MatchStatus, id: string): void {
@@ -487,7 +565,9 @@ export async function listMatches(): Promise<{ active: MatchSummary | null; hist
 }
 
 export async function getMatchDetail(id: string): Promise<MatchDetail> {
-  return cloneMatch(getMatchById(id));
+  const match = getMatchById(id);
+  advanceAutomation(match);
+  return cloneMatch(match);
 }
 
 export async function createMatch(creator: MatchUser, bo: BoType, captainMode: CaptainMode): Promise<MatchDetail> {
@@ -519,6 +599,7 @@ export async function startMatch(id: string, actorUserId: number, actorRole: "gu
 
 export async function joinMatch(id: string, user: MatchUser): Promise<MatchDetail> {
   const match = getMatchById(id);
+  advanceAutomation(match);
   if (match.status !== "gathering") {
     throw new Error("当前阶段不可加入");
   }
@@ -539,6 +620,7 @@ export async function joinMatch(id: string, user: MatchUser): Promise<MatchDetai
 
 export async function leaveMatch(id: string, userId: number): Promise<MatchDetail> {
   const match = getMatchById(id);
+  advanceAutomation(match);
   if (match.status !== "gathering") {
     throw new Error("当前阶段不可退出");
   }
@@ -552,6 +634,7 @@ export async function leaveMatch(id: string, userId: number): Promise<MatchDetai
 
 export async function assignCaptains(id: string, actorUserId: number, captainAUserId: number, captainBUserId: number): Promise<MatchDetail> {
   const match = getMatchById(id);
+  advanceAutomation(match);
   if (match.creatorUserId !== actorUserId) {
     throw new Error("仅创建者可指定队长");
   }
@@ -574,6 +657,7 @@ export async function assignCaptains(id: string, actorUserId: number, captainAUs
 
 export async function draftPick(id: string, captainUserId: number, targetUserId: number): Promise<MatchDetail> {
   const match = getMatchById(id);
+  advanceAutomation(match);
   if (match.status !== "player_draft") {
     throw new Error("当前不是选人阶段");
   }
@@ -599,6 +683,7 @@ export async function draftPick(id: string, captainUserId: number, targetUserId:
 
 export async function vetoMap(id: string, captainUserId: number, mapName: string): Promise<MatchDetail> {
   const match = getMatchById(id);
+  advanceAutomation(match);
   if (match.status !== "map_veto") {
     throw new Error("当前不是 BP 阶段");
   }

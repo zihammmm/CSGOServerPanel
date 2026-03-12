@@ -32,8 +32,27 @@ const statusText: Record<string, string> = {
   cancelled: "已取消",
 };
 
+const mapNameText: Record<string, string> = {
+  de_ancient: "远古遗迹",
+  de_anubis: "阿努比斯",
+  de_dust2: "炙热沙城 II",
+  de_inferno: "炼狱小镇",
+  de_mirage: "荒漠迷城",
+  de_nuke: "核子危机",
+  de_train: "列车停放站",
+};
+
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatMapName(map: string): string {
+  return mapNameText[map] || map;
+}
+
+function formatCountdown(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
 }
 
 function phaseList(current: string): Array<{ key: string; label: string; done: boolean; active: boolean }> {
@@ -64,11 +83,13 @@ export default function MatchDetailPage() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showForceStartModal, setShowForceStartModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   const isAdmin = useMemo(() => me?.role === "admin", [me]);
   const players = match?.players ?? [];
   const mapResults = match?.mapResults ?? [];
   const pickedMaps = match?.pickedMaps ?? [];
+  const pickedMapDetails = match?.pickedMapDetails ?? [];
   const mapsPool = match?.mapsPool ?? [];
   const vetoSteps = match?.vetoSteps ?? [];
   const draftTurns = match?.draftTurns ?? [];
@@ -79,6 +100,8 @@ export default function MatchDetailPage() {
 
   const teamA = useMemo(() => players.filter((p) => p.team === "A"), [players]);
   const teamB = useMemo(() => players.filter((p) => p.team === "B"), [players]);
+  const captainA = useMemo(() => players.find((p) => p.isCaptain && p.team === "A") || null, [players]);
+  const captainB = useMemo(() => players.find((p) => p.isCaptain && p.team === "B") || null, [players]);
   const scoreTabs = useMemo(() => {
     if (!match || match.status !== "finished") return [];
     return [
@@ -133,6 +156,16 @@ export default function MatchDetailPage() {
     !!vetoTurn &&
     vetoTurn.team === mePlayer.team;
 
+  const turnDeadline = useMemo(() => {
+    if (!match || (match.status !== "player_draft" && match.status !== "map_veto")) return null;
+    return new Date(match.updatedAt).getTime() + 30_000;
+  }, [match]);
+
+  const countdownSeconds = useMemo(() => {
+    if (!turnDeadline) return 0;
+    return Math.max(0, Math.ceil((turnDeadline - now) / 1000));
+  }, [turnDeadline, now]);
+
   const load = async () => {
     const [detail] = await Promise.all([getMatchDetail(matchId)]);
     setMatch(detail);
@@ -174,6 +207,11 @@ export default function MatchDetailPage() {
     }, 3000);
     return () => clearInterval(timer);
   }, [match?.id, match?.status]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     setScoreTab("overall");
@@ -278,7 +316,15 @@ export default function MatchDetailPage() {
       <section className="panel">
         <h3>比分板</h3>
         <p>当前人数: {players.length}/10</p>
-        <p>比赛地图: {pickedMaps.join(" / ") || "-"}</p>
+        <p>
+          比赛地图: {pickedMapDetails.length > 0
+            ? pickedMapDetails.map((item) => {
+              const pickedBy = item.pickedByTeam ? `Team ${item.pickedByTeam} Pick` : "默认图";
+              const side = item.startSide === "T" ? "，Pick 方默认当匪" : "";
+              return `${formatMapName(item.map)}（${pickedBy}${side}）`;
+            }).join(" / ")
+            : pickedMaps.map(formatMapName).join(" / ") || "-"}
+        </p>
         <p className="muted">最后更新时间: {formatTime(match.updatedAt)}</p>
         {match.status === "finished" && (
           <>
@@ -303,17 +349,17 @@ export default function MatchDetailPage() {
           </>
         )}
         {match.status !== "finished" && (
-          <div className="grid grid-2">
-            <div>
-              <h4>Team A</h4>
+          <div className="team-panels">
+            <div className="team-panel team-panel-a">
+              <h4>{captainA ? `${captainA.userId} 的队伍` : "Team A"}</h4>
               <ul>
                 {teamA.map((p) => (
                   <li key={p.userId}>{p.nickname} {p.isCaptain ? "(队长)" : ""}</li>
                 ))}
               </ul>
             </div>
-            <div>
-              <h4>Team B</h4>
+            <div className="team-panel team-panel-b">
+              <h4>{captainB ? `${captainB.userId} 的队伍` : "Team B"}</h4>
               <ul>
                 {teamB.map((p) => (
                   <li key={p.userId}>{p.nickname} {p.isCaptain ? "(队长)" : ""}</li>
@@ -322,7 +368,7 @@ export default function MatchDetailPage() {
             </div>
           </div>
         )}
-        {match.status !== "finished" && (
+        {match.status !== "finished" && unassigned.length > 0 && (
           <>
             <h4>未分队玩家</h4>
             <ul>
@@ -361,7 +407,7 @@ export default function MatchDetailPage() {
         )}
         {isAdmin && match.status === "ready_to_start" && (
           <p className="row-actions">
-            <button className="button secondary" onClick={doLaunch}>启动比赛（模拟 GET5 已下发）</button>
+            <button className="button match-launch-ready" onClick={doLaunch}>启动比赛（模拟 GET5 已下发）</button>
           </p>
         )}
         {isAdmin && match.status === "live" && (
@@ -473,6 +519,7 @@ export default function MatchDetailPage() {
         <section className="panel">
           <h3>队长选人（ABBA 蛇形）</h3>
           <p>当前回合: {draftTurnTeam ? `Team ${draftTurnTeam}` : "-"}</p>
+          <p>剩余时间: {formatCountdown(countdownSeconds)}，超时后系统随机选人</p>
           <p className="muted">{"顺序: A -> B -> B -> A -> A -> B -> B -> A"}</p>
           <div className="pick-grid">
             {unassigned.map((p: MatchPlayer) => (
@@ -494,6 +541,7 @@ export default function MatchDetailPage() {
         <section className="panel">
           <h3>BP 选图</h3>
           <p>当前回合: {vetoTurn ? `Team ${vetoTurn.team} ${vetoTurn.action === "ban" ? "Ban" : "Pick"}` : "已完成"}</p>
+          <p>剩余时间: {formatCountdown(countdownSeconds)}，超时后系统随机 {vetoTurn?.action === "ban" ? "Ban" : "Pick"} 一张图</p>
           <div className="map-pool">
             {mapsPool.map((map) => (
               <button
@@ -502,7 +550,7 @@ export default function MatchDetailPage() {
                 disabled={!canVeto}
                 onClick={() => run(() => vetoMap(matchId, me!.id, map))}
               >
-                {vetoTurn?.action === "ban" ? "Ban" : "Pick"} {map}
+                {vetoTurn?.action === "ban" ? "Ban" : "Pick"} {formatMapName(map)}
               </button>
             ))}
           </div>
@@ -510,7 +558,7 @@ export default function MatchDetailPage() {
           <h4>BP 轨迹</h4>
           <ul>
             {vetoSteps.map((s) => (
-              <li key={`${s.order}-${s.map}`}>#{s.order} Team {s.team} {s.action.toUpperCase()} {s.map}</li>
+              <li key={`${s.order}-${s.map}`}>#{s.order} Team {s.team} {s.action.toUpperCase()} {formatMapName(s.map)}</li>
             ))}
           </ul>
         </section>
