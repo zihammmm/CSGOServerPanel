@@ -9,10 +9,10 @@ export async function getMatchDetail(id: string): Promise<MatchDetail> {
   return apiFetch<MatchDetail>(`/api/v1/matches/${id}`);
 }
 
-export async function createMatch(_creator: MatchUser, bo: BoType, captainMode: CaptainMode): Promise<MatchDetail> {
+export async function createMatch(_creator: MatchUser, bo: BoType, captainMode: CaptainMode, title: string): Promise<MatchDetail> {
   return apiFetch<MatchDetail>("/api/v1/admin/matches", {
     method: "POST",
-    body: JSON.stringify({ bo, captainMode }),
+    body: JSON.stringify({ bo, captainMode, title }),
   });
 }
 

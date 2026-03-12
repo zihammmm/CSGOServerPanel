@@ -39,6 +39,7 @@ var (
 type matchRow struct {
 	ID          int64
 	DisplayID   string
+	Title       string
 	CreatorUser int64
 	CreatorName string
 	Status      string
@@ -121,7 +122,7 @@ func (a *App) registerMatchRoutes(authed *gin.RouterGroup, admin *gin.RouterGrou
 func (a *App) listMatches(c *gin.Context) {
 	rows, err := a.db.Query(`
 		SELECT m.id, m.display_id, m.creator_user_id, u.nickname, m.status, m.bo, m.captain_mode,
-			m.score_a, m.score_b, m.server_addr, m.created_at, m.updated_at,
+			m.title, m.score_a, m.score_b, m.server_addr, m.created_at, m.updated_at,
 			COALESCE((SELECT COUNT(*) FROM match_players mp WHERE mp.match_id = m.id), 0) AS player_count
 		FROM matches m
 		JOIN users u ON u.id = m.creator_user_id
@@ -150,13 +151,13 @@ func (a *App) listMatches(c *gin.Context) {
 	for rows.Next() {
 		var r matchRow
 		var playerCount int
-		if err := rows.Scan(&r.ID, &r.DisplayID, &r.CreatorUser, &r.CreatorName, &r.Status, &r.Bo, &r.CaptainMode, &r.ScoreA, &r.ScoreB, &r.ServerAddr, &r.CreatedAt, &r.UpdatedAt, &playerCount); err != nil {
+		if err := rows.Scan(&r.ID, &r.DisplayID, &r.CreatorUser, &r.CreatorName, &r.Status, &r.Bo, &r.CaptainMode, &r.Title, &r.ScoreA, &r.ScoreB, &r.ServerAddr, &r.CreatedAt, &r.UpdatedAt, &playerCount); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan matches"})
 			return
 		}
 		s := summary{
 			ID:          r.DisplayID,
-			Title:       matchTitle(r.Bo, r.CreatedAt),
+			Title:       matchTitle(r.Title, r.Bo, r.CreatedAt),
 			Status:      r.Status,
 			Bo:          r.Bo,
 			CaptainMode: r.CaptainMode,
@@ -195,7 +196,7 @@ func (a *App) getMatchDetail(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":               row.DisplayID,
-		"title":            matchTitle(row.Bo, row.CreatedAt),
+		"title":            matchTitle(row.Title, row.Bo, row.CreatedAt),
 		"status":           row.Status,
 		"bo":               row.Bo,
 		"captainMode":      row.CaptainMode,
@@ -275,6 +276,7 @@ func (a *App) adminCreateMatch(c *gin.Context) {
 	var req struct {
 		Bo          int    `json:"bo"`
 		CaptainMode string `json:"captainMode"`
+		Title       string `json:"title"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -287,6 +289,14 @@ func (a *App) adminCreateMatch(c *gin.Context) {
 	if req.CaptainMode != "admin_assigned" && req.CaptainMode != "random" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid captainMode"})
 		return
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	if len(req.Title) > 48 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title must be 1-48 chars"})
+		return
+	}
+	if req.Title == "" {
+		req.Title = matchTitle("", req.Bo, time.Now())
 	}
 
 	tx, err := a.db.BeginTx(c.Request.Context(), nil)
@@ -301,9 +311,9 @@ func (a *App) adminCreateMatch(c *gin.Context) {
 	}
 	displayID := generateDisplayID()
 	if _, err := tx.ExecContext(c.Request.Context(), `
-		INSERT INTO matches (display_id, creator_user_id, status, bo, captain_mode, server_addr)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, displayID, claims.UserID, matchStatusGathering, req.Bo, req.CaptainMode, a.cfg.GameServerAddress); err != nil {
+		INSERT INTO matches (display_id, title, creator_user_id, status, bo, captain_mode, server_addr)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, displayID, req.Title, claims.UserID, matchStatusGathering, req.Bo, req.CaptainMode, a.cfg.GameServerAddress); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create match"})
 		return
 	}
@@ -312,7 +322,7 @@ func (a *App) adminCreateMatch(c *gin.Context) {
 		return
 	}
 
-	a.writeMatchEventAsync(displayID, claims.UserID, "match_created", gin.H{"bo": req.Bo, "captainMode": req.CaptainMode})
+	a.writeMatchEventAsync(displayID, claims.UserID, "match_created", gin.H{"bo": req.Bo, "captainMode": req.CaptainMode, "title": req.Title})
 	a.returnMatchDetailByDisplayID(c, displayID)
 }
 
@@ -957,13 +967,13 @@ func (a *App) getMatchByDisplayID(ctx context.Context, displayID string) (matchR
 func getMatchByDisplayIDTx(ctx context.Context, q queryer, displayID string) (matchRow, error) {
 	row := q.QueryRowContext(ctx, `
 		SELECT m.id, m.display_id, m.creator_user_id, u.nickname, m.status, m.bo, m.captain_mode,
-			m.score_a, m.score_b, m.server_addr, m.created_at, m.updated_at
+			m.title, m.score_a, m.score_b, m.server_addr, m.created_at, m.updated_at
 		FROM matches m
 		JOIN users u ON u.id = m.creator_user_id
 		WHERE m.display_id = $1
 	`, displayID)
 	var m matchRow
-	err := row.Scan(&m.ID, &m.DisplayID, &m.CreatorUser, &m.CreatorName, &m.Status, &m.Bo, &m.CaptainMode, &m.ScoreA, &m.ScoreB, &m.ServerAddr, &m.CreatedAt, &m.UpdatedAt)
+	err := row.Scan(&m.ID, &m.DisplayID, &m.CreatorUser, &m.CreatorName, &m.Status, &m.Bo, &m.CaptainMode, &m.Title, &m.ScoreA, &m.ScoreB, &m.ServerAddr, &m.CreatedAt, &m.UpdatedAt)
 	return m, err
 }
 
@@ -1476,7 +1486,10 @@ func isTerminalStatus(status string) bool {
 	return status == matchStatusFinished || status == matchStatusCancelled
 }
 
-func matchTitle(bo int, createdAt time.Time) string {
+func matchTitle(title string, bo int, createdAt time.Time) string {
+	if strings.TrimSpace(title) != "" {
+		return strings.TrimSpace(title)
+	}
 	local := createdAt.Local()
 	return fmt.Sprintf("5v5 竞技 BO%d - %d/%d %02d:%02d", bo, local.Month(), local.Day(), local.Hour(), local.Minute())
 }

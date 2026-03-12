@@ -351,6 +351,7 @@ func migrate(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS matches (
 			id BIGSERIAL PRIMARY KEY,
 			display_id TEXT NOT NULL UNIQUE,
+			title TEXT NOT NULL DEFAULT '',
 			creator_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
 			status TEXT NOT NULL,
 			bo INTEGER NOT NULL,
@@ -361,6 +362,7 @@ func migrate(db *sql.DB) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE matches ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS match_players (
 			id BIGSERIAL PRIMARY KEY,
 			match_id BIGINT NOT NULL REFERENCES matches(id) ON DELETE CASCADE,

@@ -45,6 +45,7 @@ export default function MatchesPage() {
   const [data, setData] = useState<MatchesResponse>({ active: null, history: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [createTitle, setCreateTitle] = useState("");
   const [createBO, setCreateBO] = useState<BoType>(3);
   const [createCaptainMode, setCreateCaptainMode] = useState<CaptainMode>("admin_assigned");
 
@@ -92,7 +93,9 @@ export default function MatchesPage() {
         { userId: me.id, steamId: me.steamId, nickname: me.nickname },
         createBO,
         createCaptainMode,
+        createTitle,
       );
+      setCreateTitle("");
       await loadMatches();
     } catch (e) {
       setError(String(e));
@@ -145,6 +148,15 @@ export default function MatchesPage() {
         <section className="panel">
           <h3>新建比赛（管理员）</h3>
           <div className="grid grid-2">
+            <label>
+              比赛名
+              <input
+                value={createTitle}
+                onChange={(e) => setCreateTitle(e.target.value)}
+                placeholder="不填则自动生成默认比赛名"
+                maxLength={48}
+              />
+            </label>
             <label>
               BO
               <select value={createBO} onChange={(e) => setCreateBO(Number(e.target.value) as BoType)}>

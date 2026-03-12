@@ -173,10 +173,10 @@ function makeTimestampId(seq: number): string {
   return `${Date.now()}${String(seq).padStart(3, "0")}`;
 }
 
-function createDetail(creator: MatchUser, bo: BoType, captainMode: CaptainMode): MatchDetail {
+function createDetail(creator: MatchUser, bo: BoType, captainMode: CaptainMode, title?: string): MatchDetail {
   return {
     id: makeTimestampId(state.idSeq++),
-    title: makeTitle(bo),
+    title: title?.trim() || makeTitle(bo),
     status: "gathering",
     bo,
     captainMode,
@@ -570,9 +570,9 @@ export async function getMatchDetail(id: string): Promise<MatchDetail> {
   return cloneMatch(match);
 }
 
-export async function createMatch(creator: MatchUser, bo: BoType, captainMode: CaptainMode): Promise<MatchDetail> {
+export async function createMatch(creator: MatchUser, bo: BoType, captainMode: CaptainMode, title: string): Promise<MatchDetail> {
   validateSingleActive("gathering", "");
-  const match = createDetail(creator, bo, captainMode);
+  const match = createDetail(creator, bo, captainMode, title);
   state.matches.push(match);
   return cloneMatch(match);
 }
