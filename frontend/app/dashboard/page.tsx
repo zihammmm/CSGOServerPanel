@@ -160,42 +160,42 @@ export default function DashboardPage() {
 
       {hasLivePlayers && (
         <>
-          <div className="grid grid-2">
+          <div className="dashboard-live-grid">
             <section className="panel">
               <h3>当前对局比分</h3>
               <p>CT: {live?.scoreCt ?? 0}</p>
               <p>T: {live?.scoreT ?? 0}</p>
               <p className="muted">更新时间: {live?.updatedAt || "-"}</p>
             </section>
-          </div>
 
-          <section className="panel">
-            <h3>对局玩家数据</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>玩家ID</th>
-                  <th>昵称</th>
-                  <th>K</th>
-                  <th>D</th>
-                  <th>KD</th>
-                  <th>队伍</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(live?.players || []).map((p) => (
-                  <tr key={p.playerId}>
-                    <td>{p.playerId}</td>
-                    <td>{p.name}</td>
-                    <td>{p.kills}</td>
-                    <td>{p.deaths}</td>
-                    <td>{p.kd.toFixed(2)}</td>
-                    <td>{p.team}</td>
+            <section className="panel">
+              <h3>对局玩家数据</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>玩家ID</th>
+                    <th>昵称</th>
+                    <th>K</th>
+                    <th>D</th>
+                    <th>KD</th>
+                    <th>队伍</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+                </thead>
+                <tbody>
+                  {(live?.players || []).map((p) => (
+                    <tr key={p.playerId}>
+                      <td>{p.playerId}</td>
+                      <td>{p.name}</td>
+                      <td>{p.kills}</td>
+                      <td>{p.deaths}</td>
+                      <td>{p.kd.toFixed(2)}</td>
+                      <td>{p.team}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          </div>
         </>
       )}
 

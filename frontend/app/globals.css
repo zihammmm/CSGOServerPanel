@@ -179,6 +179,13 @@ a {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
+.dashboard-live-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .button {
   background: var(--primary);
   color: #001a15;
@@ -464,5 +471,9 @@ ul {
 
   .content {
     overflow: visible;
+  }
+
+  .dashboard-live-grid {
+    grid-template-columns: 1fr;
   }
 }
