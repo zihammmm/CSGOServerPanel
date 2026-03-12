@@ -60,6 +60,18 @@ function formatModeName(mode: string): string {
   return modeOptions.find((item) => item.value === mode)?.label || mode || "未知模式";
 }
 
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso || "-";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const second = String(date.getSeconds()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
 export default function DashboardPage() {
   const [me, setMe] = useState<CurrentUser | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -208,58 +220,52 @@ export default function DashboardPage() {
       </div>
 
       {hasLivePlayers && (
-        <>
-          <div className="dashboard-live-grid">
-            <section className="panel">
-              <h3>当前对局比分</h3>
-              <p>CT: {live?.scoreCt ?? 0}</p>
-              <p>T: {live?.scoreT ?? 0}</p>
-              <p className="muted">更新时间: {live?.updatedAt || "-"}</p>
-            </section>
-
-            <section className="panel">
-              <h3>对局玩家数据</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th>玩家ID</th>
-                    <th>昵称</th>
-                    <th>K</th>
-                    <th>D</th>
-                    <th>KD</th>
-                    <th>队伍</th>
-                    {isAdmin && <th>操作</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(live?.players || []).map((p) => (
-                    <tr key={p.playerId}>
-                      <td>{p.playerId}</td>
-                      <td>{p.name}</td>
-                      <td>{p.kills}</td>
-                      <td>{p.deaths}</td>
-                      <td>{p.kd.toFixed(2)}</td>
-                      <td>{p.team}</td>
-                      {isAdmin && (
-                        <td>
-                          <button
-                            className="button danger"
-                            onClick={() => {
-                              setKickModal({ playerId: p.playerId, playerName: p.name });
-                              setKickReason("");
-                            }}
-                          >
-                            踢人
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
+        <section className="panel">
+          <h3>当前对局</h3>
+          <div style={{ textAlign: "center", marginBottom: "1rem" }}>
+            <p><strong>CT: {live?.scoreCt ?? 0} : {live?.scoreT ?? 0} T</strong></p>
+            <p className="muted">更新时间: {live?.updatedAt ? formatTime(live.updatedAt) : "-"}</p>
           </div>
-        </>
+          <h4>对局玩家数据</h4>
+          <table>
+            <thead>
+              <tr>
+                <th>玩家ID</th>
+                <th>昵称</th>
+                <th>K</th>
+                <th>D</th>
+                <th>KD</th>
+                <th>队伍</th>
+                {isAdmin && <th>操作</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {(live?.players || []).map((p) => (
+                <tr key={p.playerId}>
+                  <td>{p.playerId}</td>
+                  <td>{p.name}</td>
+                  <td>{p.kills}</td>
+                  <td>{p.deaths}</td>
+                  <td>{p.kd.toFixed(2)}</td>
+                  <td>{p.team}</td>
+                  {isAdmin && (
+                    <td>
+                      <button
+                        className="button danger"
+                        onClick={() => {
+                          setKickModal({ playerId: p.playerId, playerName: p.name });
+                          setKickReason("");
+                        }}
+                      >
+                        踢人
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
       )}
 
       {isAdmin && (
@@ -314,7 +320,7 @@ export default function DashboardPage() {
               <tbody>
                 {audit.map((a) => (
                   <tr key={a.id}>
-                    <td>{a.createdAt}</td>
+                    <td>{formatTime(a.createdAt)}</td>
                     <td>{a.admin}</td>
                     <td>{a.action}</td>
                     <td>{a.target}</td>
