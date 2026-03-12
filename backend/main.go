@@ -654,6 +654,10 @@ func (a *App) getUserBySteamID(steamID string) (User, error) {
 	return u, err
 }
 
+func defaultNicknameForSteamID(steamID string) string {
+	return "Player-" + steamID[max(0, len(steamID)-6):]
+}
+
 func (a *App) listAdmins(c *gin.Context) {
 	rows, err := a.db.Query(`
 		SELECT id, steam_id, role, nickname
@@ -695,14 +699,22 @@ func (a *App) addAdmin(c *gin.Context) {
 	}
 	nickname := strings.TrimSpace(req.Nickname)
 	if nickname == "" {
+		defaultNickname := defaultNicknameForSteamID(steamID)
 		existingUser, err := a.getUserBySteamID(steamID)
-		if err == nil && strings.TrimSpace(existingUser.Nickname) != "" {
+		if err == nil && strings.TrimSpace(existingUser.Nickname) != "" && existingUser.Nickname != defaultNickname {
 			nickname = existingUser.Nickname
 		} else if err != nil && err != sql.ErrNoRows {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query existing user"})
 			return
 		} else {
-			nickname = "Player-" + steamID[max(0, len(steamID)-6):]
+			nickname = defaultNickname
+		}
+		if nickname == defaultNickname {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+			defer cancel()
+			if steamName, err := fetchSteamPersonaName(ctx, steamID); err == nil && strings.TrimSpace(steamName) != "" {
+				nickname = strings.TrimSpace(steamName)
+			}
 		}
 	}
 	user, err := a.upsertUser(steamID, nickname, true)
