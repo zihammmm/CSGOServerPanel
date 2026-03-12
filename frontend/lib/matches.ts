@@ -27,11 +27,14 @@ export const getMatchDetail = (...args: Parameters<typeof mock.getMatchDetail>):
 export const createMatch = (...args: Parameters<typeof mock.createMatch>): ReturnType<typeof mock.createMatch> =>
   (useMock ? mock.createMatch : api.createMatch)(...args);
 
-export const openMatch = (...args: Parameters<typeof mock.openMatch>): ReturnType<typeof mock.openMatch> =>
-  (useMock ? mock.openMatch : api.openMatch)(...args);
+export const startMatch = (...args: Parameters<typeof mock.startMatch>): ReturnType<typeof mock.startMatch> =>
+  (useMock ? mock.startMatch : api.startMatch)(...args);
 
 export const joinMatch = (...args: Parameters<typeof mock.joinMatch>): ReturnType<typeof mock.joinMatch> =>
   (useMock ? mock.joinMatch : api.joinMatch)(...args);
+
+export const leaveMatch = (...args: Parameters<typeof mock.leaveMatch>): ReturnType<typeof mock.leaveMatch> =>
+  (useMock ? mock.leaveMatch : api.leaveMatch)(...args);
 
 export const assignCaptains = (...args: Parameters<typeof mock.assignCaptains>): ReturnType<typeof mock.assignCaptains> =>
   (useMock ? mock.assignCaptains : api.assignCaptains)(...args);

@@ -382,6 +382,18 @@ td {
   color: #042019;
 }
 
+.button.match-start-ready {
+  background: linear-gradient(135deg, #f2cf66, #d89a1f);
+  color: #241400;
+  border-color: rgba(255, 220, 120, 0.75);
+  box-shadow: 0 0 0 1px rgba(255, 220, 120, 0.2), 0 10px 26px rgba(216, 154, 31, 0.25);
+}
+
+.button.match-start-ready:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px rgba(255, 220, 120, 0.28), 0 14px 30px rgba(216, 154, 31, 0.32);
+}
+
 .pick-grid,
 .map-pool {
   display: grid;

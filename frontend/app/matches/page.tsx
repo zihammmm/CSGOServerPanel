@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, CurrentUser, steamLoginURL } from "../../lib/api";
-import { BoType, CaptainMode, MatchSummary, createMatch, forceStartMatch, listMatches, openMatch } from "../../lib/matches";
+import { BoType, CaptainMode, MatchSummary, createMatch, listMatches } from "../../lib/matches";
 
 type MatchesResponse = {
   active: MatchSummary | null;
@@ -12,7 +12,7 @@ type MatchesResponse = {
 
 const statusText: Record<string, string> = {
   created: "已创建",
-  gathering: "招募中",
+  gathering: "报名中",
   captain_pick: "指定队长",
   player_draft: "队长选人",
   map_veto: "BP 选图",
@@ -85,17 +85,6 @@ export default function MatchesPage() {
     }
   };
 
-  const runOpen = async () => {
-    if (!data.active || !me || !isAdmin) return;
-    setError("");
-    try {
-      await openMatch(data.active.id, me.id);
-      await loadMatches();
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
   if (loading) {
     return <section className="panel"><p className="muted">比赛数据加载中...</p></section>;
   }
@@ -134,30 +123,6 @@ export default function MatchesPage() {
             <p className="action-row">
               <Link className="button" href={`/matches/${data.active.id}`}>查看详情</Link>
             </p>
-            {isAdmin && data.active.status === "created" && (
-              <p className="action-row">
-                <button className="button secondary" onClick={runOpen}>开启比赛</button>
-              </p>
-            )}
-            {isAdmin && data.active.status === "gathering" && (
-              <p className="action-row">
-                <button
-                  className="button secondary"
-                  onClick={async () => {
-                    if (!me) return;
-                    setError("");
-                    try {
-                      await forceStartMatch(data.active!.id, me.id, me.role);
-                      await loadMatches();
-                    } catch (e) {
-                      setError(String(e));
-                    }
-                  }}
-                >
-                  强制开始（未满10人）
-                </button>
-              </p>
-            )}
           </div>
         )}
       </section>

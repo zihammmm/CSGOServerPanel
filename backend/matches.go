@@ -98,11 +98,12 @@ func (a *App) registerMatchRoutes(authed *gin.RouterGroup, admin *gin.RouterGrou
 	authed.GET("/matches", a.listMatches)
 	authed.GET("/matches/:id", a.getMatchDetail)
 	authed.POST("/matches/:id/join", a.joinMatch)
+	authed.POST("/matches/:id/leave", a.leaveMatch)
 	authed.POST("/matches/:id/draft/pick", a.adminDraftPick)
 	authed.POST("/matches/:id/veto/action", a.adminVetoAction)
 
 	admin.POST("/matches", a.adminCreateMatch)
-	admin.POST("/matches/:id/open", a.adminOpenMatch)
+	admin.POST("/matches/:id/start", a.adminStartMatch)
 	admin.POST("/matches/:id/force-start", a.adminForceStartMatch)
 	admin.POST("/matches/:id/captains", a.adminAssignCaptains)
 	admin.POST("/matches/:id/launch", a.adminLaunchMatch)
@@ -274,7 +275,7 @@ func (a *App) adminCreateMatch(c *gin.Context) {
 	if _, err := tx.ExecContext(c.Request.Context(), `
 		INSERT INTO matches (display_id, creator_user_id, status, bo, captain_mode, server_addr)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, displayID, claims.UserID, matchStatusCreated, req.Bo, req.CaptainMode, a.cfg.GameServerAddress); err != nil {
+	`, displayID, claims.UserID, matchStatusGathering, req.Bo, req.CaptainMode, a.cfg.GameServerAddress); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create match"})
 		return
 	}
@@ -287,23 +288,24 @@ func (a *App) adminCreateMatch(c *gin.Context) {
 	a.returnMatchDetailByDisplayID(c, displayID)
 }
 
-func (a *App) adminOpenMatch(c *gin.Context) {
+func (a *App) adminStartMatch(c *gin.Context) {
 	claims := c.MustGet("user").(*Claims)
 	id := strings.TrimSpace(c.Param("id"))
 	err := a.updateMatchWithTx(c, id, claims, func(tx *sql.Tx, row matchRow) error {
-		if row.CreatorUser != claims.UserID {
-			return fmt.Errorf("only creator can open match")
+		if row.Status != matchStatusGathering {
+			return fmt.Errorf("current status cannot start")
 		}
-		if row.Status != matchStatusCreated {
-			return fmt.Errorf("match is not in created status")
-		}
-		if err := a.ensureSingleActiveMatchTx(tx, row.ID); err != nil {
+		var count int
+		if err := tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM match_players WHERE match_id = $1`, row.ID).Scan(&count); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusGathering, row.ID); err != nil {
+		if count != 10 {
+			return fmt.Errorf("match room must have 10 players to start")
+		}
+		if err := insertMatchEventTx(c.Request.Context(), tx, row.ID, claims.UserID, "match_started", gin.H{"playerCount": count}); err != nil {
 			return err
 		}
-		return insertMatchEventTx(c.Request.Context(), tx, row.ID, claims.UserID, "match_opened", gin.H{})
+		return a.progressAfterPlayerCount(c.Request.Context(), tx, row.ID, row.CaptainMode)
 	})
 	if err != nil {
 		a.handleMatchError(c, err)
@@ -316,7 +318,7 @@ func (a *App) joinMatch(c *gin.Context) {
 	claims := c.MustGet("user").(*Claims)
 	id := strings.TrimSpace(c.Param("id"))
 	err := a.updateMatchWithTx(c, id, claims, func(tx *sql.Tx, row matchRow) error {
-		if row.Status != matchStatusGathering && row.Status != matchStatusCaptainPick {
+		if row.Status != matchStatusGathering {
 			return fmt.Errorf("current status cannot join")
 		}
 		var joined bool
@@ -341,7 +343,48 @@ func (a *App) joinMatch(c *gin.Context) {
 				return err
 			}
 		}
-		return a.progressAfterPlayerCount(c.Request.Context(), tx, row.ID, row.CaptainMode)
+		_, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET updated_at = NOW() WHERE id = $1`, row.ID)
+		return err
+	})
+	if err != nil {
+		a.handleMatchError(c, err)
+		return
+	}
+	a.returnMatchDetailByDisplayID(c, id)
+}
+
+func (a *App) leaveMatch(c *gin.Context) {
+	claims := c.MustGet("user").(*Claims)
+	id := strings.TrimSpace(c.Param("id"))
+	err := a.updateMatchWithTx(c, id, claims, func(tx *sql.Tx, row matchRow) error {
+		if row.Status != matchStatusGathering {
+			return fmt.Errorf("current status cannot leave")
+		}
+		res, err := tx.ExecContext(c.Request.Context(), `DELETE FROM match_players WHERE match_id = $1 AND user_id = $2`, row.ID, claims.UserID)
+		if err != nil {
+			return err
+		}
+		aff, _ := res.RowsAffected()
+		if aff == 0 {
+			return fmt.Errorf("player is not in room")
+		}
+		if _, err := tx.ExecContext(c.Request.Context(), `
+			WITH ordered AS (
+				SELECT id, ROW_NUMBER() OVER (ORDER BY join_order ASC, created_at ASC) AS next_order
+				FROM match_players
+				WHERE match_id = $1
+			)
+			UPDATE match_players mp
+			SET join_order = ordered.next_order
+			FROM ordered
+			WHERE mp.id = ordered.id
+		`, row.ID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET updated_at = NOW() WHERE id = $1`, row.ID); err != nil {
+			return err
+		}
+		return insertMatchEventTx(c.Request.Context(), tx, row.ID, claims.UserID, "player_left", gin.H{"userId": claims.UserID})
 	})
 	if err != nil {
 		a.handleMatchError(c, err)
@@ -360,6 +403,9 @@ func (a *App) adminForceStartMatch(c *gin.Context) {
 		var count int
 		if err := tx.QueryRowContext(c.Request.Context(), `SELECT COUNT(*) FROM match_players WHERE match_id = $1`, row.ID).Scan(&count); err != nil {
 			return err
+		}
+		if count >= 10 {
+			return fmt.Errorf("match room already has 10 players")
 		}
 		for count < 10 {
 			botNo := time.Now().UnixNano()%1000000 + int64(count)
@@ -773,7 +819,7 @@ func (a *App) handleMatchError(c *gin.Context, err error) {
 	}
 	msg := strings.TrimSpace(err.Error())
 	switch {
-	case strings.Contains(msg, "only"), strings.Contains(msg, "not your"), strings.Contains(msg, "cannot"), strings.Contains(msg, "must"):
+	case strings.Contains(msg, "only"), strings.Contains(msg, "not your"), strings.Contains(msg, "cannot"), strings.Contains(msg, "must"), strings.Contains(msg, "already has"), strings.Contains(msg, "not in room"):
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 	case strings.Contains(msg, "already an active match"):
 		c.JSON(http.StatusConflict, gin.H{"error": msg})

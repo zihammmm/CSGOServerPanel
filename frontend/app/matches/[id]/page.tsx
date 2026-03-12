@@ -13,13 +13,15 @@ import {
   forceStartMatch,
   getMatchDetail,
   joinMatch,
+  leaveMatch,
   launchMatch,
+  startMatch,
   vetoMap,
 } from "../../../lib/matches";
 
 const statusText: Record<string, string> = {
   created: "已创建",
-  gathering: "招募中",
+  gathering: "报名中",
   captain_pick: "指定队长",
   player_draft: "队长选人",
   map_veto: "BP 选图",
@@ -58,6 +60,8 @@ export default function MatchDetailPage() {
   const [capA, setCapA] = useState<number>(0);
   const [capB, setCapB] = useState<number>(0);
   const [scoreTab, setScoreTab] = useState<string>("overall");
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showForceStartModal, setShowForceStartModal] = useState(false);
 
   const isAdmin = useMemo(() => me?.role === "admin", [me]);
   const players = match?.players ?? [];
@@ -105,7 +109,12 @@ export default function MatchDetailPage() {
     return vetoScript[match.vetoTurnIndex] || null;
   }, [match, vetoScript]);
 
-  const canJoin = !!match && match.status === "gathering" && !!me && !mePlayer;
+  const isRegistrationStage = match?.status === "gathering";
+  const isMatchFull = players.length >= 10;
+  const canJoin = !!match && isRegistrationStage && !!me && !mePlayer && !isMatchFull;
+  const canLeave = !!match && isRegistrationStage && !!mePlayer;
+  const canStart = !!match && isRegistrationStage && isAdmin && players.length === 10;
+  const canForceStart = !!match && isRegistrationStage && isAdmin && players.length < 10;
 
   const canDraft =
     !!match &&
@@ -185,8 +194,16 @@ export default function MatchDetailPage() {
   };
 
   const doJoin = () => {
-    if (!me) return;
+    if (!me) {
+      setShowLoginModal(true);
+      return;
+    }
     run(() => joinMatch(matchId, { userId: me.id, steamId: me.steamId, nickname: me.nickname }));
+  };
+
+  const doLeave = () => {
+    if (!me) return;
+    run(() => leaveMatch(matchId, me.id));
   };
 
   const doAssignCaptains = () => {
@@ -207,6 +224,11 @@ export default function MatchDetailPage() {
   const doForceStart = () => {
     if (!me) return;
     run(() => forceStartMatch(matchId, me.id, me.role));
+  };
+
+  const doStart = () => {
+    if (!me) return;
+    run(() => startMatch(matchId, me.id, me.role));
   };
 
   const captainOptions = players.map((p) => ({ label: `${p.nickname} (${p.steamId})`, value: p.userId }));
@@ -240,14 +262,6 @@ export default function MatchDetailPage() {
           ))}
         </div>
       </section>
-
-      {!me && (
-        <section className="panel">
-          <p>
-            <a className="button" href={steamLoginURL()}>Steam 登录后可加入比赛房间</a>
-          </p>
-        </section>
-      )}
 
       <section className="panel">
         <h3>比分板</h3>
@@ -307,13 +321,31 @@ export default function MatchDetailPage() {
           </>
         )}
 
-        {match.status === "gathering" && me && (
-          <p className="row-actions">
-            <button className="button" disabled={!canJoin} onClick={doJoin}>加入房间</button>
-            {isAdmin && (
-              <button className="button secondary" onClick={doForceStart}>强制开始（未满10人）</button>
-            )}
-          </p>
+        {isRegistrationStage && (
+          <>
+            <p className="muted">报名环节中，已登录用户可加入或退出房间。</p>
+            <p className="row-actions">
+              {!mePlayer ? (
+                <button className="button" disabled={!!me && !canJoin} onClick={doJoin}>
+                  {!me ? "加入比赛房间" : isMatchFull ? "房间已满" : "加入比赛房间"}
+                </button>
+              ) : (
+                <button className="button secondary" onClick={doLeave} disabled={!canLeave}>
+                  退出比赛房间
+                </button>
+              )}
+              {isAdmin && (
+                <>
+                  <button className={`button ${canStart ? "match-start-ready" : "secondary"}`} disabled={!canStart} onClick={doStart}>
+                    开启比赛
+                  </button>
+                  <button className="button secondary" disabled={!canForceStart} onClick={() => setShowForceStartModal(true)}>
+                    强制开启
+                  </button>
+                </>
+              )}
+            </p>
+          </>
         )}
         {isAdmin && match.status === "ready_to_start" && (
           <p className="row-actions">
@@ -476,6 +508,40 @@ export default function MatchDetailPage() {
         <section className="panel">
           <p className="muted">错误: {error}</p>
         </section>
+      )}
+
+      {showLoginModal && (
+        <div className="logout-modal-backdrop" onClick={() => setShowLoginModal(false)}>
+          <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>登录后才能加入比赛房间</h3>
+            <p className="muted">当前处于报名环节，请先完成 Steam 登录后再加入。</p>
+            <p className="row-actions">
+              <a className="button" href={steamLoginURL()}>Steam 登录</a>
+              <button className="button secondary" onClick={() => setShowLoginModal(false)}>关闭</button>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showForceStartModal && (
+        <div className="logout-modal-backdrop" onClick={() => setShowForceStartModal(false)}>
+          <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>确认强制开启比赛</h3>
+            <p className="muted">当前报名人数不足 10 人，系统会补足机器人到 10 人后立即进入下一流程。</p>
+            <p className="row-actions">
+              <button className="button secondary" onClick={() => setShowForceStartModal(false)}>取消</button>
+              <button
+                className="button"
+                onClick={async () => {
+                  setShowForceStartModal(false);
+                  doForceStart();
+                }}
+              >
+                确认强制开启
+              </button>
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

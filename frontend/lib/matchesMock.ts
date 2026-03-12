@@ -169,7 +169,7 @@ function createDetail(creator: MatchUser, bo: BoType, captainMode: CaptainMode):
   return {
     id: makeTimestampId(state.idSeq++),
     title: makeTitle(bo),
-    status: "created",
+    status: "gathering",
     bo,
     captainMode,
     creatorName: creator.nickname,
@@ -491,26 +491,35 @@ export async function getMatchDetail(id: string): Promise<MatchDetail> {
 }
 
 export async function createMatch(creator: MatchUser, bo: BoType, captainMode: CaptainMode): Promise<MatchDetail> {
-  validateSingleActive("created", "");
+  validateSingleActive("gathering", "");
   const match = createDetail(creator, bo, captainMode);
   state.matches.push(match);
   return cloneMatch(match);
 }
 
-export async function openMatch(id: string, actorUserId: number): Promise<MatchDetail> {
+export async function startMatch(id: string, actorUserId: number, actorRole: "guest" | "admin"): Promise<MatchDetail> {
   const match = getMatchById(id);
-  if (match.creatorUserId !== actorUserId) {
-    throw new Error("仅创建者可开启比赛");
+  if (actorRole !== "admin") {
+    throw new Error("仅管理员可开启比赛");
   }
-  validateSingleActive("gathering", id);
-  match.status = "gathering";
-  match.updatedAt = nowISO();
+  if (match.status !== "gathering") {
+    throw new Error("当前阶段不可开启比赛");
+  }
+  if (match.players.length !== 10) {
+    throw new Error("房间人数达到 10 人后才可开启比赛");
+  }
+  if (match.captainMode === "random") {
+    applyRandomCaptains(match);
+  } else {
+    match.status = "captain_pick";
+    match.updatedAt = nowISO();
+  }
   return cloneMatch(match);
 }
 
 export async function joinMatch(id: string, user: MatchUser): Promise<MatchDetail> {
   const match = getMatchById(id);
-  if (match.status !== "gathering" && match.status !== "captain_pick") {
+  if (match.status !== "gathering") {
     throw new Error("当前阶段不可加入");
   }
   if (!match.players.some((p) => p.userId === user.userId)) {
@@ -524,15 +533,7 @@ export async function joinMatch(id: string, user: MatchUser): Promise<MatchDetai
       joinedAt: nowISO(),
     });
   }
-
-  if (match.players.length === 10) {
-    if (match.captainMode === "random") {
-      applyRandomCaptains(match);
-    } else {
-      match.status = "captain_pick";
-      match.updatedAt = nowISO();
-    }
-  }
+  match.updatedAt = nowISO();
   return cloneMatch(match);
 }
 
@@ -540,6 +541,9 @@ export async function leaveMatch(id: string, userId: number): Promise<MatchDetai
   const match = getMatchById(id);
   if (match.status !== "gathering") {
     throw new Error("当前阶段不可退出");
+  }
+  if (!match.players.some((p) => p.userId === userId)) {
+    throw new Error("用户未加入该比赛");
   }
   match.players = match.players.filter((p) => p.userId !== userId);
   match.updatedAt = nowISO();
@@ -645,11 +649,14 @@ export async function launchMatch(id: string, actorUserId: number): Promise<Matc
 
 export async function forceStartMatch(id: string, actorUserId: number, actorRole: "guest" | "admin"): Promise<MatchDetail> {
   const match = getMatchById(id);
-  if (match.creatorUserId !== actorUserId && actorRole !== "admin") {
+  if (actorUserId <= 0 || actorRole !== "admin") {
     throw new Error("仅管理员可强制开始比赛");
   }
   if (match.status !== "gathering") {
     throw new Error("当前阶段不可强制开始");
+  }
+  if (match.players.length >= 10) {
+    throw new Error("房间已满，请直接开启比赛");
   }
   while (match.players.length < 10) {
     const botID = 900000 + state.botSeq++;
