@@ -377,7 +377,7 @@ export default function MatchDetailPage() {
             {players.length === 0 ? (
               <p className="muted">当前还没有玩家报名。</p>
             ) : (
-              <ul>
+              <ul className="player-list">
                 {players.map((p) => (
                   <li key={p.userId}>
                     <div className="user-cell">
@@ -394,7 +394,7 @@ export default function MatchDetailPage() {
           <div className="team-panels">
             <div className="team-panel team-panel-a">
               <h4>{captainA ? `${captainA.nickname} 的队伍` : "A 队"}</h4>
-              <ul>
+              <ul className="player-list">
                 {teamA.map((p) => (
                   <li key={p.userId}>
                     <div className="user-cell">
@@ -407,7 +407,7 @@ export default function MatchDetailPage() {
             </div>
             <div className="team-panel team-panel-b">
               <h4>{captainB ? `${captainB.nickname} 的队伍` : "B 队"}</h4>
-              <ul>
+              <ul className="player-list">
                 {teamB.map((p) => (
                   <li key={p.userId}>
                     <div className="user-cell">
@@ -423,7 +423,7 @@ export default function MatchDetailPage() {
         {showTeamPanels && unassigned.length > 0 && (
           <>
             <h4>未分队玩家</h4>
-            <ul>
+            <ul className="player-list">
               {unassigned.map((p) => (
                 <li key={p.userId}>
                   <div className="user-cell">

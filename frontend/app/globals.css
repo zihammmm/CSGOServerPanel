@@ -98,7 +98,6 @@ a {
   border-radius: 10px;
   display: block;
   object-fit: cover;
-  border: 1px solid #42567d;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.3);
   flex-shrink: 0;
 }
@@ -501,6 +500,15 @@ ul {
   padding-left: 20px;
 }
 
+.player-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.player-list li {
+  margin: 8px 0;
+}
+
 .scoreboard-player {
   display: inline-flex;
   align-items: center;
@@ -517,7 +525,6 @@ ul {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  border: 1px solid #33435f;
   background: #0f1624;
   object-fit: cover;
 }
