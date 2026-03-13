@@ -103,6 +103,14 @@ type pickedMapDetail struct {
 	StartSide    string `json:"startSide,omitempty"`
 }
 
+type get5JobItem struct {
+	Status     string `json:"status"`
+	ConfigPath string `json:"configPath"`
+	Stdout     string `json:"stdout,omitempty"`
+	Stderr     string `json:"stderr,omitempty"`
+	CreatedAt  string `json:"createdAt"`
+}
+
 func (a *App) registerPublicMatchRoutes(public *gin.RouterGroup) {
 	public.GET("/matches", a.listMatches)
 	public.GET("/matches/:id", a.getMatchDetail)
@@ -120,6 +128,7 @@ func (a *App) registerAuthedMatchRoutes(authed *gin.RouterGroup, admin *gin.Rout
 	admin.POST("/matches/:id/cancel", a.adminCancelMatch)
 	admin.POST("/matches/:id/captains", a.adminAssignCaptains)
 	admin.POST("/matches/:id/launch", a.adminLaunchMatch)
+	admin.POST("/matches/:id/restart", a.adminRestartMatch)
 	admin.POST("/matches/:id/finish", a.adminFinishMatch)
 }
 
@@ -188,7 +197,14 @@ func (a *App) listMatches(c *gin.Context) {
 
 func (a *App) getMatchDetail(c *gin.Context) {
 	matchID := strings.TrimSpace(c.Param("id"))
-	row, players, steps, mapsPool, pickedMaps, bannedMaps, draftTurnIndex, vetoScript, vetoTurnIndex, pickedMapDetails, mapResults, overallStats, err := a.loadMatchDetailPayload(c.Request.Context(), matchID)
+	includeGet5Job := false
+	if claims, ok := a.parseClaimsFromHeader(c.GetHeader("Authorization")); ok {
+		currentUser, err := a.getUserByID(claims.UserID)
+		if err == nil && (currentUser.Role == roleAdmin || currentUser.Role == roleSuperAdmin) {
+			includeGet5Job = true
+		}
+	}
+	row, players, steps, mapsPool, pickedMaps, bannedMaps, draftTurnIndex, vetoScript, vetoTurnIndex, pickedMapDetails, mapResults, overallStats, liveStats, lastGet5Job, err := a.loadMatchDetailPayload(c.Request.Context(), matchID)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "match not found"})
 		return
@@ -196,6 +212,9 @@ func (a *App) getMatchDetail(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query match"})
 		return
+	}
+	if !includeGet5Job {
+		lastGet5Job = nil
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -223,32 +242,34 @@ func (a *App) getMatchDetail(c *gin.Context) {
 		"vetoTurnIndex":    vetoTurnIndex,
 		"playerStats":      overallStats,
 		"mapResults":       mapResults,
+		"liveStats":        liveStats,
+		"lastGet5Job":      lastGet5Job,
 	})
 }
 
-func (a *App) loadMatchDetailPayload(ctx context.Context, displayID string) (matchRow, []matchPlayerItem, []vetoStepItem, []string, []string, []string, int, []vetoTurn, int, []pickedMapDetail, []mapResultItem, []mapPlayerStatItem, error) {
+func (a *App) loadMatchDetailPayload(ctx context.Context, displayID string) (matchRow, []matchPlayerItem, []vetoStepItem, []string, []string, []string, int, []vetoTurn, int, []pickedMapDetail, []mapResultItem, []mapPlayerStatItem, *matchLiveStats, *get5JobItem, error) {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
-		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
 	}
 	defer tx.Rollback()
 
 	row, err := getMatchByDisplayIDTx(ctx, tx, displayID)
 	if err != nil {
-		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
 	}
 	row, err = advanceAutomationsTx(ctx, tx, row)
 	if err != nil {
-		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
 	}
 
 	players, err := getMatchPlayersTx(ctx, tx, row.ID)
 	if err != nil {
-		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
 	}
 	steps, err := getVetoStepsTx(ctx, tx, row.ID)
 	if err != nil {
-		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
 	}
 	mapsPool, pickedMaps, bannedMaps := computeMapState(row.Bo, row.Status, steps)
 	draftTurnIndex, _ := computeDraftState(players)
@@ -257,11 +278,19 @@ func (a *App) loadMatchDetailPayload(ctx context.Context, displayID string) (mat
 	pickedMapDetails := buildPickedMapDetails(row.Bo, row.Status, steps)
 	mapResults, overallStats, err := getMatchResultsTx(ctx, tx, row.ID)
 	if err != nil {
-		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
+	}
+	liveStats, err := getMatchLiveSnapshotTx(ctx, tx, row.ID, pickedMaps)
+	if err != nil {
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
+	}
+	lastGet5Job, err := getLatestGet5JobTx(ctx, tx, row.ID)
+	if err != nil {
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, err
+		return matchRow{}, nil, nil, nil, nil, nil, 0, nil, 0, nil, nil, nil, nil, nil, err
 	}
 	if mapsPool == nil {
 		mapsPool = []string{}
@@ -272,7 +301,7 @@ func (a *App) loadMatchDetailPayload(ctx context.Context, displayID string) (mat
 	if bannedMaps == nil {
 		bannedMaps = []string{}
 	}
-	return row, players, steps, mapsPool, pickedMaps, bannedMaps, draftTurnIndex, vetoScript, vetoTurnIndex, pickedMapDetails, mapResults, overallStats, nil
+	return row, players, steps, mapsPool, pickedMaps, bannedMaps, draftTurnIndex, vetoScript, vetoTurnIndex, pickedMapDetails, mapResults, overallStats, liveStats, lastGet5Job, nil
 }
 
 func (a *App) adminCreateMatch(c *gin.Context) {
@@ -723,60 +752,57 @@ func (a *App) adminLaunchMatch(c *gin.Context) {
 		if row.Status != matchStatusReadyToStart {
 			return fmt.Errorf("current status cannot launch")
 		}
-		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusLaunching, row.ID); err != nil {
-			return err
-		}
+		return a.dispatchMatchLaunch(c.Request.Context(), tx, row, claims.UserID, "match_launched", "match_launch_failed")
+	})
+	if err != nil {
+		a.handleMatchError(c, err)
+		return
+	}
+	a.returnMatchDetailByDisplayID(c, id)
+}
 
+func (a *App) adminRestartMatch(c *gin.Context) {
+	claims := c.MustGet("user").(*Claims)
+	id := strings.TrimSpace(c.Param("id"))
+	err := a.updateMatchWithTx(c, id, claims, func(tx *sql.Tx, row matchRow) error {
+		if row.CreatorUser != claims.UserID {
+			return fmt.Errorf("only creator can restart match")
+		}
+		if row.Status != matchStatusLive && row.Status != matchStatusFinished && row.Status != matchStatusReadyToStart {
+			return fmt.Errorf("current status cannot restart")
+		}
 		players, err := getMatchPlayersTx(c.Request.Context(), tx, row.ID)
 		if err != nil {
 			return err
+		}
+		assigned := 0
+		for _, p := range players {
+			if p.Team != nil {
+				assigned++
+			}
+		}
+		if assigned < 10 {
+			return fmt.Errorf("match teams are incomplete")
 		}
 		steps, err := getVetoStepsTx(c.Request.Context(), tx, row.ID)
 		if err != nil {
 			return err
 		}
-		_, pickedMaps, _ := computeMapState(row.Bo, row.Status, steps)
+		_, pickedMaps, _ := computeMapState(row.Bo, matchStatusReadyToStart, steps)
 		if len(pickedMaps) == 0 {
-			pickedMaps = []string{"de_mirage"}
+			return fmt.Errorf("match maps are not finalized")
 		}
-		cfgJSON, err := buildGet5Config(row, players, pickedMaps, buildPickedMapDetails(row.Bo, row.Status, steps))
-		if err != nil {
+		if _, err := tx.ExecContext(c.Request.Context(), `DELETE FROM match_map_results WHERE match_id = $1`, row.ID); err != nil {
 			return err
 		}
-		configPath := fmt.Sprintf("match_%s.json", row.DisplayID)
-		stdout, stderr, dispatchErr := a.dispatchGet5Config(c.Request.Context(), configPath, cfgJSON)
-		jobStatus := "success"
-		if dispatchErr != nil {
-			jobStatus = "failed"
-			if strings.TrimSpace(stderr) == "" {
-				stderr = dispatchErr.Error()
-			} else {
-				stderr = stderr + "\n" + dispatchErr.Error()
-			}
-		}
-
-		if _, err := tx.ExecContext(c.Request.Context(), `
-				INSERT INTO match_get5_jobs (match_id, status, config_path, stdout, stderr)
-				VALUES ($1, $2, $3, $4, $5)
-			`, row.ID, jobStatus, configPath, stdout+"\n"+string(cfgJSON), nullable(stderr)); err != nil {
+		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET status = $1, score_a = NULL, score_b = NULL, updated_at = NOW() WHERE id = $2`, matchStatusReadyToStart, row.ID); err != nil {
 			return err
 		}
-
-		if jobStatus == "success" {
-			if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusLive, row.ID); err != nil {
-				return err
-			}
-			return insertMatchEventTx(c.Request.Context(), tx, row.ID, claims.UserID, "match_launched", gin.H{"configPath": configPath, "status": "success"})
-		}
-
-		if _, err := tx.ExecContext(c.Request.Context(), `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusReadyToStart, row.ID); err != nil {
-			return err
-		}
-		return insertMatchEventTx(c.Request.Context(), tx, row.ID, claims.UserID, "match_launch_failed", gin.H{
-			"configPath": configPath,
-			"status":     "failed",
-			"error":      stderr,
-		})
+		row.Status = matchStatusReadyToStart
+		row.ScoreA = sql.NullInt64{}
+		row.ScoreB = sql.NullInt64{}
+		row.UpdatedAt = time.Now().UTC()
+		return a.dispatchMatchLaunch(c.Request.Context(), tx, row, claims.UserID, "match_restarted", "match_restart_failed")
 	})
 	if err != nil {
 		a.handleMatchError(c, err)
@@ -850,6 +876,66 @@ func (a *App) adminFinishMatch(c *gin.Context) {
 		return
 	}
 	a.returnMatchDetailByDisplayID(c, id)
+}
+
+func (a *App) dispatchMatchLaunch(ctx context.Context, tx *sql.Tx, row matchRow, actorUserID int64, successEvent string, failedEvent string) error {
+	if err := deleteMatchLiveSnapshotTx(ctx, tx, row.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusLaunching, row.ID); err != nil {
+		return err
+	}
+
+	players, err := getMatchPlayersTx(ctx, tx, row.ID)
+	if err != nil {
+		return err
+	}
+	steps, err := getVetoStepsTx(ctx, tx, row.ID)
+	if err != nil {
+		return err
+	}
+	_, pickedMaps, _ := computeMapState(row.Bo, row.Status, steps)
+	if len(pickedMaps) == 0 {
+		pickedMaps = []string{"de_mirage"}
+	}
+	cfgJSON, err := buildGet5Config(row, players, pickedMaps, buildPickedMapDetails(row.Bo, row.Status, steps))
+	if err != nil {
+		return err
+	}
+	configPath := fmt.Sprintf("match_%s.json", row.DisplayID)
+	stdout, stderr, dispatchErr := a.dispatchGet5Config(ctx, configPath, pickedMaps[0], cfgJSON)
+	jobStatus := "success"
+	if dispatchErr != nil {
+		jobStatus = "failed"
+		if strings.TrimSpace(stderr) == "" {
+			stderr = dispatchErr.Error()
+		} else {
+			stderr = stderr + "\n" + dispatchErr.Error()
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+			INSERT INTO match_get5_jobs (match_id, status, config_path, stdout, stderr)
+			VALUES ($1, $2, $3, $4, $5)
+		`, row.ID, jobStatus, configPath, stdout+"\n"+string(cfgJSON), nullable(stderr)); err != nil {
+		return err
+	}
+
+	if jobStatus == "success" {
+		if _, err := tx.ExecContext(ctx, `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusLive, row.ID); err != nil {
+			return err
+		}
+		return insertMatchEventTx(ctx, tx, row.ID, actorUserID, successEvent, gin.H{"configPath": configPath, "status": "success"})
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE matches SET status = $1, updated_at = NOW() WHERE id = $2`, matchStatusReadyToStart, row.ID); err != nil {
+		return err
+	}
+	return insertMatchEventTx(ctx, tx, row.ID, actorUserID, failedEvent, gin.H{
+		"configPath": configPath,
+		"status":     "failed",
+		"error":      stderr,
+	})
 }
 
 func (a *App) updateMatchWithTx(c *gin.Context, displayID string, claims *Claims, fn func(tx *sql.Tx, row matchRow) error) error {
@@ -981,6 +1067,19 @@ func getMatchByDisplayIDTx(ctx context.Context, q queryer, displayID string) (ma
 	return m, err
 }
 
+func getMatchByIDTx(ctx context.Context, q queryer, id int64) (matchRow, error) {
+	row := q.QueryRowContext(ctx, `
+		SELECT m.id, m.display_id, m.creator_user_id, u.nickname, m.status, m.bo, m.captain_mode,
+			m.title, m.score_a, m.score_b, m.server_addr, m.created_at, m.updated_at
+		FROM matches m
+		JOIN users u ON u.id = m.creator_user_id
+		WHERE m.id = $1
+	`, id)
+	var m matchRow
+	err := row.Scan(&m.ID, &m.DisplayID, &m.CreatorUser, &m.CreatorName, &m.Status, &m.Bo, &m.CaptainMode, &m.Title, &m.ScoreA, &m.ScoreB, &m.ServerAddr, &m.CreatedAt, &m.UpdatedAt)
+	return m, err
+}
+
 type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
@@ -1044,6 +1143,28 @@ func getVetoStepsTx(ctx context.Context, q dbQueryer, matchID int64) ([]vetoStep
 		steps = append(steps, it)
 	}
 	return steps, nil
+}
+
+func getLatestGet5JobTx(ctx context.Context, q queryer, matchID int64) (*get5JobItem, error) {
+	row := q.QueryRowContext(ctx, `
+		SELECT status, config_path, COALESCE(stdout, ''), COALESCE(stderr, ''), created_at
+		FROM match_get5_jobs
+		WHERE match_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, matchID)
+
+	var item get5JobItem
+	var createdAt time.Time
+	err := row.Scan(&item.Status, &item.ConfigPath, &item.Stdout, &item.Stderr, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	return &item, nil
 }
 
 func (a *App) getMatchResults(ctx context.Context, matchID int64) ([]mapResultItem, []mapPlayerStatItem, error) {
@@ -1395,30 +1516,58 @@ func (a *App) writeMatchEventAsync(displayID string, actorUserID int64, eventTyp
 }
 
 func buildGet5Config(m matchRow, players []matchPlayerItem, maps []string, pickedMapDetails []pickedMapDetail) ([]byte, error) {
-	teamA := make([]gin.H, 0, 5)
-	teamB := make([]gin.H, 0, 5)
+	payload, err := buildGet5Payload(m, players, maps, pickedMapDetails)
+	if err != nil {
+		return nil, err
+	}
+	return convertMatchPayloadToGet5Config(payload)
+}
+
+func buildGet5Payload(m matchRow, players []matchPlayerItem, maps []string, pickedMapDetails []pickedMapDetail) (internalMatchPayload, error) {
+	teamA := make([]matchPlayerItem, 0, 5)
+	teamB := make([]matchPlayerItem, 0, 5)
 	for _, p := range players {
 		if p.Team == nil {
 			continue
 		}
-		item := gin.H{"steamId": p.SteamID, "nickname": p.Nickname}
 		if *p.Team == "A" {
-			teamA = append(teamA, item)
+			teamA = append(teamA, p)
 		} else {
-			teamB = append(teamB, item)
+			teamB = append(teamB, p)
 		}
 	}
-	payload := gin.H{
-		"matchId":          m.DisplayID,
-		"bo":               m.Bo,
-		"maplist":          maps,
-		"pickedMapDetails": pickedMapDetails,
-		"teamA":            teamA,
-		"teamB":            teamB,
-		"server":           m.ServerAddr,
-		"generatedAt":      time.Now().UTC().Format(time.RFC3339),
+
+	if len(teamA) != 5 || len(teamB) != 5 {
+		return internalMatchPayload{}, fmt.Errorf("get5 config requires 5 assigned players per team, got teamA=%d teamB=%d", len(teamA), len(teamB))
 	}
-	return json.Marshal(payload)
+	if len(maps) == 0 {
+		return internalMatchPayload{}, fmt.Errorf("get5 config requires at least one selected map")
+	}
+
+	return internalMatchPayload{
+		MatchID:          m.DisplayID,
+		SeriesType:       m.Bo,
+		Maplist:          append([]string{}, maps...),
+		PickedMapDetails: append([]pickedMapDetail{}, pickedMapDetails...),
+		TeamA:            buildInternalPayloadPlayers(teamA),
+		TeamB:            buildInternalPayloadPlayers(teamB),
+		Server:           m.ServerAddr,
+		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
+		Title:            matchTitle(m.Title, m.Bo, m.CreatedAt),
+		DatabaseMatchID:  m.ID,
+	}, nil
+}
+
+func buildInternalPayloadPlayers(players []matchPlayerItem) []internalMatchPlayer {
+	out := make([]internalMatchPlayer, 0, len(players))
+	for _, p := range players {
+		out = append(out, internalMatchPlayer{
+			SteamID:   strings.TrimSpace(p.SteamID),
+			Nickname:  strings.TrimSpace(p.Nickname),
+			IsCaptain: p.IsCaptain,
+		})
+	}
+	return out
 }
 
 func computeSeriesScore(bo, pickedMaps int, seed int64) (int, int) {

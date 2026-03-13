@@ -49,6 +49,9 @@ export const vetoMap = (...args: Parameters<typeof mock.vetoMap>): ReturnType<ty
 export const launchMatch = (...args: Parameters<typeof mock.launchMatch>): ReturnType<typeof mock.launchMatch> =>
   (useMock ? mock.launchMatch : api.launchMatch)(...args);
 
+export const restartMatch = (...args: Parameters<typeof mock.restartMatch>): ReturnType<typeof mock.restartMatch> =>
+  (useMock ? mock.restartMatch : api.restartMatch)(...args);
+
 export const forceStartMatch = (...args: Parameters<typeof mock.forceStartMatch>): ReturnType<typeof mock.forceStartMatch> =>
   (useMock ? mock.forceStartMatch : api.forceStartMatch)(...args);
 

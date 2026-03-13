@@ -95,10 +95,12 @@ export default function SettingsPage() {
           <p className="muted" style={{ margin: "2px 0 0" }}>SteamID: {me.steamId}</p>
         </div>
       </div>
-      <label>
-        游戏昵称
-        <input value={nickname} onChange={(e) => setNickname(e.target.value)} />
-      </label>
+      <div style={{ marginTop: "18px" }}>
+        <h3 style={{ margin: "0 0 10px" }}>游戏昵称</h3>
+        <label>
+          <input value={nickname} onChange={(e) => setNickname(e.target.value)} />
+        </label>
+      </div>
       <p>
         <button className="button" onClick={save}>
           保存昵称

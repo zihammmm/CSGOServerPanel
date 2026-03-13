@@ -7,5 +7,5 @@ backend/bin
 
 # local env
 backend/.env
+frontend/.env
 frontend/.env.local
-

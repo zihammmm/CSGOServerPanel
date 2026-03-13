@@ -33,33 +33,38 @@ const (
 )
 
 type Config struct {
-	Port                    string
-	DatabaseURL             string
-	JWTSecret               string
-	FrontendURL             string
-	FrontendAuthCallbackURL string
-	SteamRealm              string
-	SteamReturnTo           string
-	AdminSteamIDs           map[string]struct{}
-	SuperAdminSteamIDs      map[string]struct{}
-	RCONHost                string
-	RCONPassword            string
-	RCONTimeout             time.Duration
-	GameServerAddress       string
-	PollInterval            time.Duration
-	MatchSSHHost            string
-	MatchSSHPort            string
-	MatchSSHUser            string
-	MatchSSHKeyPath         string
-	MatchRemoteGet5Dir      string
-	MatchServerRestartCmd   string
+	Port                     string
+	DatabaseURL              string
+	JWTSecret                string
+	Get5EventAuthHeaderKey   string
+	Get5EventAuthHeaderValue string
+	Get5EventServerID        string
+	FrontendURL              string
+	FrontendAuthCallbackURL  string
+	SteamRealm               string
+	SteamReturnTo            string
+	AdminSteamIDs            map[string]struct{}
+	SuperAdminSteamIDs       map[string]struct{}
+	RCONHost                 string
+	RCONPassword             string
+	RCONTimeout              time.Duration
+	GameServerAddress        string
+	PollInterval             time.Duration
+	MatchSSHHost             string
+	MatchSSHPort             string
+	MatchSSHUser             string
+	MatchSSHKeyPath          string
+	MatchRemoteGet5Dir       string
+	MatchServerRestartCmd    string
 }
 
 type App struct {
-	cfg      Config
-	db       *sql.DB
-	rcon     *RCONClient
-	snapshot *SnapshotStore
+	cfg          Config
+	db           *sql.DB
+	rcon         *RCONClient
+	snapshot     *SnapshotStore
+	playerSeenMu sync.Mutex
+	playerSeenAt map[string]time.Time
 }
 
 type User struct {
@@ -80,12 +85,15 @@ type Claims struct {
 }
 
 type LivePlayer struct {
-	PlayerID string  `json:"playerId"`
-	Name     string  `json:"name"`
-	Kills    int     `json:"kills"`
-	Deaths   int     `json:"deaths"`
-	KD       float64 `json:"kd"`
-	Team     string  `json:"team"`
+	PlayerID         string  `json:"playerId"`
+	SteamID          string  `json:"steamId"`
+	Name             string  `json:"name"`
+	AvatarURL        string  `json:"avatarUrl"`
+	Kills            int     `json:"kills"`
+	Deaths           int     `json:"deaths"`
+	KD               float64 `json:"kd"`
+	Team             string  `json:"team"`
+	ConnectedSeconds int64   `json:"connectedSeconds"`
 }
 
 type ServerStatus struct {
@@ -201,7 +209,8 @@ func main() {
 			password: cfg.RCONPassword,
 			timeout:  cfg.RCONTimeout,
 		},
-		snapshot: NewSnapshotStore(),
+		snapshot:     NewSnapshotStore(),
+		playerSeenAt: map[string]time.Time{},
 	}
 	go app.pollSnapshots()
 
@@ -217,6 +226,11 @@ func main() {
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
+
+	internal := r.Group("/api/v1/internal")
+	{
+		internal.POST("/get5/events", app.handleGet5Event)
+	}
 
 	api := r.Group("/api/v1")
 	{
@@ -276,26 +290,29 @@ func loadConfig() Config {
 	}
 	frontendURL := getEnv("FRONTEND_URL", "http://localhost:3000")
 	return Config{
-		Port:                    getEnv("PORT", "8080"),
-		DatabaseURL:             getEnv("DATABASE_URL", "postgres://postgres:postgres@db:5432/csgopanel?sslmode=disable"),
-		JWTSecret:               getEnv("JWT_SECRET", "dev-secret"),
-		FrontendURL:             frontendURL,
-		FrontendAuthCallbackURL: getEnv("FRONTEND_AUTH_CALLBACK_URL", frontendURL+"/auth/callback"),
-		SteamRealm:              getEnv("STEAM_REALM", "http://localhost:8080"),
-		SteamReturnTo:           getEnv("STEAM_RETURN_TO", "http://localhost:8080/api/v1/auth/steam/callback"),
-		AdminSteamIDs:           adminIDs,
-		SuperAdminSteamIDs:      superAdminIDs,
-		RCONHost:                getEnv("RCON_HOST", ""),
-		RCONPassword:            getEnv("RCON_PASSWORD", ""),
-		RCONTimeout:             getDurationEnv("RCON_TIMEOUT", 5*time.Second),
-		GameServerAddress:       getEnv("GAME_SERVER_ADDRESS", "127.0.0.1:27015"),
-		PollInterval:            getDurationEnv("POLL_INTERVAL", 5*time.Second),
-		MatchSSHHost:            getEnv("MATCH_SSH_HOST", ""),
-		MatchSSHPort:            getEnv("MATCH_SSH_PORT", "22"),
-		MatchSSHUser:            getEnv("MATCH_SSH_USER", ""),
-		MatchSSHKeyPath:         getEnv("MATCH_SSH_KEY_PATH", ""),
-		MatchRemoteGet5Dir:      getEnv("MATCH_REMOTE_GET5_DIR", ""),
-		MatchServerRestartCmd:   getEnv("MATCH_SERVER_RESTART_CMD", ""),
+		Port:                     getEnv("PORT", "8080"),
+		DatabaseURL:              getEnv("DATABASE_URL", "postgres://postgres:postgres@db:5432/csgopanel?sslmode=disable"),
+		JWTSecret:                getEnv("JWT_SECRET", "dev-secret"),
+		Get5EventAuthHeaderKey:   getEnv("GET5_EVENT_AUTH_HEADER_KEY", "Authorization"),
+		Get5EventAuthHeaderValue: getEnv("GET5_EVENT_AUTH_HEADER_VALUE", ""),
+		Get5EventServerID:        getEnv("GET5_EVENT_SERVER_ID", ""),
+		FrontendURL:              frontendURL,
+		FrontendAuthCallbackURL:  getEnv("FRONTEND_AUTH_CALLBACK_URL", frontendURL+"/auth/callback"),
+		SteamRealm:               getEnv("STEAM_REALM", "http://localhost:8080"),
+		SteamReturnTo:            getEnv("STEAM_RETURN_TO", "http://localhost:8080/api/v1/auth/steam/callback"),
+		AdminSteamIDs:            adminIDs,
+		SuperAdminSteamIDs:       superAdminIDs,
+		RCONHost:                 getEnv("RCON_HOST", ""),
+		RCONPassword:             getEnv("RCON_PASSWORD", ""),
+		RCONTimeout:              getDurationEnv("RCON_TIMEOUT", 5*time.Second),
+		GameServerAddress:        getEnv("GAME_SERVER_ADDRESS", "127.0.0.1:27015"),
+		PollInterval:             getDurationEnv("POLL_INTERVAL", 5*time.Second),
+		MatchSSHHost:             getEnv("MATCH_SSH_HOST", ""),
+		MatchSSHPort:             getEnv("MATCH_SSH_PORT", "22"),
+		MatchSSHUser:             getEnv("MATCH_SSH_USER", ""),
+		MatchSSHKeyPath:          getEnv("MATCH_SSH_KEY_PATH", ""),
+		MatchRemoteGet5Dir:       getEnv("MATCH_REMOTE_GET5_DIR", ""),
+		MatchServerRestartCmd:    getEnv("MATCH_SERVER_RESTART_CMD", ""),
 	}
 }
 
@@ -421,6 +438,15 @@ func migrate(db *sql.DB) error {
 			stdout TEXT,
 			stderr TEXT,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS match_live_snapshots (
+			match_id BIGINT PRIMARY KEY REFERENCES matches(id) ON DELETE CASCADE,
+			map_number INTEGER NOT NULL DEFAULT 1,
+			round_number INTEGER NOT NULL DEFAULT 0,
+			score_a INTEGER NOT NULL DEFAULT 0,
+			score_b INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			payload JSONB NOT NULL DEFAULT '{}'::jsonb
 		)`,
 	}
 	for _, q := range queries {
@@ -601,23 +627,14 @@ func (a *App) issueToken(user User) (string, error) {
 
 func (a *App) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		header := strings.TrimSpace(c.GetHeader("Authorization"))
-		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer"))
-		if token == "" {
+		claims, ok := a.parseClaimsFromHeader(c.GetHeader("Authorization"))
+		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
-			return
-		}
-		claims := &Claims{}
-		parsed, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
-			return []byte(a.cfg.JWTSecret), nil
-		})
-		if err != nil || !parsed.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
 		currentUser, err := a.getUserByID(claims.UserID)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
 		claims.Role = currentUser.Role
@@ -625,6 +642,21 @@ func (a *App) authMiddleware() gin.HandlerFunc {
 		c.Set("user", claims)
 		c.Next()
 	}
+}
+
+func (a *App) parseClaimsFromHeader(header string) (*Claims, bool) {
+	token := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(header), "Bearer"))
+	if token == "" {
+		return nil, false
+	}
+	claims := &Claims{}
+	parsed, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(a.cfg.JWTSecret), nil
+	})
+	if err != nil || !parsed.Valid {
+		return nil, false
+	}
+	return claims, true
 }
 
 func (a *App) adminMiddleware() gin.HandlerFunc {
@@ -1084,6 +1116,7 @@ func (a *App) refreshSnapshot() {
 	}
 
 	players := parsePlayers(statusOutput)
+	players = a.enrichLivePlayers(players, now)
 	mapName := "unknown"
 	if matches := mapRegex.FindStringSubmatch(strings.ToLower(statusOutput)); len(matches) == 2 {
 		mapName = matches[1]
@@ -1119,30 +1152,109 @@ func parsePlayers(statusOutput string) []LivePlayer {
 	players := make([]LivePlayer, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		playerID, name, ok := parsePlayerLine(line)
+		playerID, steamID, name, ok := parsePlayerLine(line)
 		if !ok {
 			continue
 		}
 		players = append(players, LivePlayer{
-			PlayerID: playerID,
-			Name:     name,
-			Kills:    0,
-			Deaths:   0,
-			KD:       0,
-			Team:     "unknown",
+			PlayerID:  playerID,
+			SteamID:   steamID,
+			Name:      name,
+			AvatarURL: resolveAvatarURL(steamID, name, ""),
+			Kills:     0,
+			Deaths:    0,
+			KD:        0,
+			Team:      "unknown",
 		})
 	}
 	return players
 }
 
-func parsePlayerLine(line string) (playerID, name string, ok bool) {
+func parsePlayerLine(line string) (playerID, steamID, name string, ok bool) {
 	if matches := playerSteam3Regex.FindStringSubmatch(line); len(matches) == 3 {
-		return matches[2], matches[1], true
+		accountID := strings.TrimSpace(matches[2])
+		return accountID, steamID64FromAccountID(accountID), matches[1], true
 	}
 	if matches := playerSteam2Regex.FindStringSubmatch(line); len(matches) == 3 {
-		return matches[2], matches[1], true
+		steam2 := strings.TrimSpace(matches[2])
+		return steam2, steamID64FromSteam2(steam2), matches[1], true
 	}
-	return "", "", false
+	return "", "", "", false
+}
+
+func (a *App) enrichLivePlayers(players []LivePlayer, now time.Time) []LivePlayer {
+	a.playerSeenMu.Lock()
+	defer a.playerSeenMu.Unlock()
+
+	active := make(map[string]struct{}, len(players))
+	for i := range players {
+		key := strings.TrimSpace(players[i].SteamID)
+		if key == "" {
+			key = strings.TrimSpace(players[i].PlayerID)
+		}
+		if key == "" {
+			continue
+		}
+		active[key] = struct{}{}
+		firstSeen, ok := a.playerSeenAt[key]
+		if !ok {
+			firstSeen = now
+			a.playerSeenAt[key] = firstSeen
+		}
+		players[i].ConnectedSeconds = int64(now.Sub(firstSeen).Seconds())
+	}
+
+	profiles, err := getUserProfileMapBySteamIDs(context.Background(), a.db, collectDashboardSteamIDs(players))
+	if err == nil {
+		for i := range players {
+			profile, ok := profiles[strings.TrimSpace(players[i].SteamID)]
+			if !ok {
+				continue
+			}
+			if profile.Nickname != "" {
+				players[i].Name = profile.Nickname
+			}
+			players[i].AvatarURL = resolveAvatarURL(players[i].SteamID, players[i].Name, profile.AvatarURL)
+		}
+	}
+
+	for key := range a.playerSeenAt {
+		if _, ok := active[key]; !ok {
+			delete(a.playerSeenAt, key)
+		}
+	}
+	return players
+}
+
+func collectDashboardSteamIDs(players []LivePlayer) []string {
+	out := make([]string, 0, len(players))
+	for _, player := range players {
+		if strings.TrimSpace(player.SteamID) != "" {
+			out = append(out, strings.TrimSpace(player.SteamID))
+		}
+	}
+	return out
+}
+
+func steamID64FromAccountID(accountID string) string {
+	id, err := strconv.ParseInt(strings.TrimSpace(accountID), 10, 64)
+	if err != nil || id <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(76561197960265728+id, 10)
+}
+
+func steamID64FromSteam2(steam2 string) string {
+	parts := strings.Split(strings.TrimSpace(steam2), ":")
+	if len(parts) != 3 {
+		return ""
+	}
+	y, errY := strconv.ParseInt(parts[1], 10, 64)
+	z, errZ := strconv.ParseInt(parts[2], 10, 64)
+	if errY != nil || errZ != nil {
+		return ""
+	}
+	return strconv.FormatInt(76561197960265728+z*2+y, 10)
 }
 
 func parseMaxPlayers(statusOutput string) int {

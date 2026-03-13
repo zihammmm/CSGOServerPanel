@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { MatchScoreboard, MatchScoreboardRow, MatchScoreboardTeamRole } from "../../components/MatchScoreboard";
 import { apiFetch, CurrentUser } from "../../lib/api";
+import { getGameServerConnectURL } from "../../lib/gameServer";
+import { getMatchDetail, listMatches, MatchDetail } from "../../lib/matches";
 
 type ServerStatus = {
   running: boolean;
@@ -12,18 +15,19 @@ type ServerStatus = {
   updatedAt: string;
 };
 
-type MatchLive = {
+type ServerLivePlayer = {
+  playerId: string;
+  steamId: string;
+  name: string;
+  avatarUrl: string;
+  connectedSeconds: number;
+};
+
+type ServerLive = {
   scoreCt: number;
   scoreT: number;
   updatedAt: string;
-  players: Array<{
-    playerId: string;
-    name: string;
-    kills: number;
-    deaths: number;
-    kd: number;
-    team: string;
-  }>;
+  players: ServerLivePlayer[];
 };
 
 type AuditItem = {
@@ -36,7 +40,6 @@ type AuditItem = {
   createdAt: string;
 };
 
-const gameAddr = process.env.NEXT_PUBLIC_GAME_SERVER_ADDRESS || "127.0.0.1:27015";
 const officialMapPool = [
   { value: "de_mirage", label: "荒漠迷城" },
   { value: "de_inferno", label: "炼狱小镇" },
@@ -72,13 +75,22 @@ function formatTime(iso: string): string {
   return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 }
 
+function formatDuration(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const hours = String(Math.floor(safe / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((safe % 3600) / 60)).padStart(2, "0");
+  const seconds = String(safe % 60).padStart(2, "0");
+  return `${hours}:${minutes}:${seconds}`;
+}
+
 export default function DashboardPage() {
   const [me, setMe] = useState<CurrentUser | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [actionModal, setActionModal] = useState<{ title: string; message: string } | null>(null);
   const [kickModal, setKickModal] = useState<{ playerId: string; playerName: string } | null>(null);
   const [status, setStatus] = useState<ServerStatus | null>(null);
-  const [live, setLive] = useState<MatchLive | null>(null);
+  const [serverLive, setServerLive] = useState<ServerLive | null>(null);
+  const [activeMatch, setActiveMatch] = useState<MatchDetail | null>(null);
   const [audit, setAudit] = useState<AuditItem[]>([]);
   const [mapName, setMapName] = useState("de_mirage");
   const [mode, setMode] = useState("competitive");
@@ -86,7 +98,74 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
 
   const isAdmin = useMemo(() => me?.role === "admin" || me?.role === "super_admin", [me]);
-  const hasLivePlayers = (status?.players ?? 0) > 0;
+  const hasLivePlayers = !!activeMatch?.liveStats?.players?.length;
+  const activeTeamA = useMemo(() => (activeMatch?.players ?? []).filter((p) => p.team === "A"), [activeMatch]);
+  const activeTeamB = useMemo(() => (activeMatch?.players ?? []).filter((p) => p.team === "B"), [activeMatch]);
+  const activeCaptainA = useMemo(() => (activeMatch?.players ?? []).find((p) => p.isCaptain && p.team === "A") || null, [activeMatch]);
+  const activeCaptainB = useMemo(() => (activeMatch?.players ?? []).find((p) => p.isCaptain && p.team === "B") || null, [activeMatch]);
+  const activeTeamALabel = activeCaptainA ? `${activeCaptainA.nickname} 的队伍` : "队伍A";
+  const activeTeamBLabel = activeCaptainB ? `${activeCaptainB.nickname} 的队伍` : "队伍B";
+  const activeRoles = useMemo(() => {
+    const mapName = activeMatch?.liveStats?.map || activeMatch?.pickedMaps?.[0] || "";
+    const detail = (activeMatch?.pickedMapDetails ?? []).find((item) => item.map === mapName);
+    if (!detail?.pickedByTeam || !detail.startSide) {
+      return { A: "neutral" as MatchScoreboardTeamRole, B: "neutral" as MatchScoreboardTeamRole };
+    }
+    if (detail.pickedByTeam === "A") {
+      return detail.startSide === "T"
+        ? { A: "t" as MatchScoreboardTeamRole, B: "ct" as MatchScoreboardTeamRole }
+        : { A: "ct" as MatchScoreboardTeamRole, B: "t" as MatchScoreboardTeamRole };
+    }
+    return detail.startSide === "T"
+      ? { A: "ct" as MatchScoreboardTeamRole, B: "t" as MatchScoreboardTeamRole }
+      : { A: "t" as MatchScoreboardTeamRole, B: "ct" as MatchScoreboardTeamRole };
+  }, [activeMatch]);
+  const activeTeamARows = useMemo<MatchScoreboardRow[]>(
+    () =>
+      activeMatch?.liveStats?.players
+        ?.filter((p) => p.team === "A")
+        .map((p) => ({
+          key: `live-${p.steamId}`,
+          nickname: p.nickname,
+          avatarUrl: p.avatarUrl,
+          kd: `${p.kills}/${p.deaths}`,
+          assists: String(p.assists),
+          adr: String(p.adr),
+          rating: p.rating.toFixed(2),
+        })) ?? activeTeamA.map((p) => ({
+        key: `player-${p.userId}`,
+        nickname: p.nickname,
+        avatarUrl: p.avatarUrl,
+        kd: "--/--",
+        assists: "--",
+        adr: "--",
+        rating: "--",
+      })),
+    [activeMatch, activeTeamA],
+  );
+  const activeTeamBRows = useMemo<MatchScoreboardRow[]>(
+    () =>
+      activeMatch?.liveStats?.players
+        ?.filter((p) => p.team === "B")
+        .map((p) => ({
+          key: `live-${p.steamId}`,
+          nickname: p.nickname,
+          avatarUrl: p.avatarUrl,
+          kd: `${p.kills}/${p.deaths}`,
+          assists: String(p.assists),
+          adr: String(p.adr),
+          rating: p.rating.toFixed(2),
+        })) ?? activeTeamB.map((p) => ({
+        key: `player-${p.userId}`,
+        nickname: p.nickname,
+        avatarUrl: p.avatarUrl,
+        kd: "--/--",
+        assists: "--",
+        adr: "--",
+        rating: "--",
+      })),
+    [activeMatch, activeTeamB],
+  );
 
   useEffect(() => {
     if (typeof window !== "undefined" && sessionStorage.getItem("logout_notice") === "1") {
@@ -115,13 +194,16 @@ export default function DashboardPage() {
     let active = true;
     const tick = async () => {
       try {
-        const [s, l] = await Promise.all([
+        const [s, serverPlayers, matches] = await Promise.all([
           apiFetch<ServerStatus>("/api/v1/dashboard/server-status"),
-          apiFetch<MatchLive>("/api/v1/dashboard/match-live"),
+          apiFetch<ServerLive>("/api/v1/dashboard/match-live"),
+          listMatches(),
         ]);
+        const detail = matches.active ? await getMatchDetail(matches.active.id) : null;
         if (!active) return;
         setStatus(s);
-        setLive(l);
+        setServerLive(serverPlayers);
+        setActiveMatch(detail);
       } catch (e) {
         if (!active) return;
         setError(String(e));
@@ -198,7 +280,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-2">
-        <section className="panel">
+        <section className="panel dashboard-top-panel">
           <h3>服务器状态</h3>
           <p>
             运行状态:{" "}
@@ -212,59 +294,46 @@ export default function DashboardPage() {
             玩家数: {status?.players ?? 0}/{status?.maxPlayers ?? 32}
           </p>
           <p className="server-join-wrap">
-            <a className="button server-join-button" href={`steam://rungameid/4465480//+connect ${gameAddr}`}>
+            <a className="button server-join-button" href={getGameServerConnectURL()}>
               点击加入服务器
             </a>
           </p>
+        </section>
+        <section className="panel dashboard-top-panel">
+          <h3>当前服务器玩家</h3>
+          <p className="muted">更新时间: {serverLive?.updatedAt ? formatTime(serverLive.updatedAt) : "-"}</p>
+          <div className="server-player-list">
+            {(serverLive?.players ?? []).length === 0 ? (
+              <p className="muted">当前服务器内没有玩家。</p>
+            ) : (
+              (serverLive?.players ?? []).map((player) => (
+                <div key={player.steamId || player.playerId} className="server-player-row">
+                  <div className="user-cell">
+                    <img className="avatar avatar-square" src={player.avatarUrl} alt={`${player.name} avatar`} />
+                    <span>{player.name}</span>
+                  </div>
+                  <span className="muted">{formatDuration(player.connectedSeconds)}</span>
+                </div>
+              ))
+            )}
+          </div>
         </section>
       </div>
 
       {hasLivePlayers && (
         <section className="panel">
-          <h3>当前对局</h3>
-          <div style={{ textAlign: "center", marginBottom: "1rem" }}>
-            <p><strong>CT: {live?.scoreCt ?? 0} : {live?.scoreT ?? 0} T</strong></p>
-            <p className="muted">更新时间: {live?.updatedAt ? formatTime(live.updatedAt) : "-"}</p>
-          </div>
-          <h4>对局玩家数据</h4>
-          <table>
-            <thead>
-              <tr>
-                <th>玩家ID</th>
-                <th>昵称</th>
-                <th>K</th>
-                <th>D</th>
-                <th>KD</th>
-                <th>队伍</th>
-                {isAdmin && <th>操作</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {(live?.players || []).map((p) => (
-                <tr key={p.playerId}>
-                  <td>{p.playerId}</td>
-                  <td>{p.name}</td>
-                  <td>{p.kills}</td>
-                  <td>{p.deaths}</td>
-                  <td>{p.kd.toFixed(2)}</td>
-                  <td>{p.team}</td>
-                  {isAdmin && (
-                    <td>
-                      <button
-                        className="button danger"
-                        onClick={() => {
-                          setKickModal({ playerId: p.playerId, playerName: p.name });
-                          setKickReason("");
-                        }}
-                      >
-                        踢人
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <MatchScoreboard
+            title="当前对局"
+            teamALabel={activeTeamALabel}
+            teamBLabel={activeTeamBLabel}
+            scoreA={String(activeMatch?.liveStats?.scoreA ?? 0)}
+            scoreB={String(activeMatch?.liveStats?.scoreB ?? 0)}
+            teamARole={activeRoles.A}
+            teamBRole={activeRoles.B}
+            teamARows={activeTeamARows}
+            teamBRows={activeTeamBRows}
+          />
+          <p className="muted">更新时间: {activeMatch?.liveStats?.updatedAt ? formatTime(activeMatch.liveStats.updatedAt) : "-"}</p>
         </section>
       )}
 

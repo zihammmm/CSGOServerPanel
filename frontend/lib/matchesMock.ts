@@ -74,6 +74,35 @@ export type PickedMapDetail = {
   startSide?: "T";
 };
 
+export type MatchGet5Job = {
+  status: string;
+  configPath: string;
+  stdout?: string;
+  stderr?: string;
+  createdAt: string;
+};
+
+export type MatchLiveStatsPlayer = {
+  steamId: string;
+  team: TeamSide;
+  nickname: string;
+  avatarUrl: string;
+  kills: number;
+  deaths: number;
+  assists: number;
+  adr: number;
+  rating: number;
+};
+
+export type MatchLiveStats = {
+  map: string;
+  round: number;
+  scoreA: number;
+  scoreB: number;
+  updatedAt: string;
+  players: MatchLiveStatsPlayer[];
+};
+
 export type MatchDetail = Omit<MatchSummary, "playerCount"> & {
   creatorUserId: number;
   serverAddr: string;
@@ -90,6 +119,8 @@ export type MatchDetail = Omit<MatchSummary, "playerCount"> & {
   vetoTurnIndex: number;
   vetoScript: Array<{ team: TeamSide; action: VetoActionType }>;
   updatedAt: string;
+  liveStats: MatchLiveStats | null;
+  lastGet5Job: MatchGet5Job | null;
 };
 
 const SERVER_ADDR = "1.116.119.184:27015";
@@ -200,6 +231,8 @@ function createDetail(creator: MatchUser, bo: BoType, captainMode: CaptainMode, 
     vetoTurnIndex: 0,
     vetoScript: buildVetoScript(bo),
     updatedAt: nowISO(),
+    liveStats: null,
+    lastGet5Job: null,
   };
 }
 
@@ -729,6 +762,29 @@ export async function launchMatch(id: string, actorUserId: number): Promise<Matc
     throw new Error("当前阶段不可启动");
   }
   match.status = "live";
+  match.updatedAt = nowISO();
+  return cloneMatch(match);
+}
+
+export async function restartMatch(id: string, actorUserId: number): Promise<MatchDetail> {
+  const match = getMatchById(id);
+  if (match.creatorUserId !== actorUserId) {
+    throw new Error("仅创建者可重新开始比赛");
+  }
+  if (!["ready_to_start", "live", "finished"].includes(match.status)) {
+    throw new Error("当前阶段不可重新开始");
+  }
+  match.status = "live";
+  match.scoreA = null;
+  match.scoreB = null;
+  match.mapResults = [];
+  match.playerStats = [];
+  match.lastGet5Job = {
+    status: "success",
+    configPath: `match_${match.id}.json`,
+    stdout: "mock restart dispatch ok",
+    createdAt: nowISO(),
+  };
   match.updatedAt = nowISO();
   return cloneMatch(match);
 }

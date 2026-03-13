@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { apiFetch, CurrentUser, steamLoginURL } from "../../../lib/api";
+import { MatchScoreboard, MatchScoreboardRow, MatchScoreboardTeamRole } from "../../../components/MatchScoreboard";
+import { getGameServerConnectURL } from "../../../lib/gameServer";
 import {
   MatchDetail,
   MatchPlayer,
@@ -16,6 +18,7 @@ import {
   joinMatch,
   leaveMatch,
   launchMatch,
+  restartMatch,
   startMatch,
   vetoMap,
 } from "../../../lib/matches";
@@ -75,6 +78,10 @@ function formatCountdown(seconds: number): string {
   return `${String(Math.floor(safe / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
 }
 
+function formatKD(kills: number, deaths: number): string {
+  return `${kills}/${deaths}`;
+}
+
 function phaseList(current: string): Array<{ key: string; label: string; done: boolean; active: boolean }> {
   const list = [
     { key: "gathering", label: "入房" },
@@ -87,6 +94,20 @@ function phaseList(current: string): Array<{ key: string; label: string; done: b
   ];
   const index = list.findIndex((v) => v.key === current);
   return list.map((v, i) => ({ ...v, done: i <= index, active: i === index }));
+}
+
+function resolveTeamRoles(
+  mapName: string,
+  pickedMapDetails: Array<{ map: string; pickedByTeam?: "A" | "B"; startSide?: "T" }>,
+): { A: MatchScoreboardTeamRole; B: MatchScoreboardTeamRole } {
+  const detail = pickedMapDetails.find((item) => item.map === mapName);
+  if (!detail?.pickedByTeam || !detail.startSide) {
+    return { A: "neutral", B: "neutral" };
+  }
+  if (detail.pickedByTeam === "A") {
+    return detail.startSide === "T" ? { A: "t", B: "ct" } : { A: "ct", B: "t" };
+  }
+  return detail.startSide === "T" ? { A: "ct", B: "t" } : { A: "t", B: "ct" };
 }
 
 export default function MatchDetailPage() {
@@ -103,6 +124,8 @@ export default function MatchDetailPage() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showForceStartModal, setShowForceStartModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showRestartModal, setShowRestartModal] = useState(false);
+  const [launching, setLaunching] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const isAdmin = useMemo(() => me?.role === "admin" || me?.role === "super_admin", [me]);
@@ -115,6 +138,8 @@ export default function MatchDetailPage() {
   const draftTurns = match?.draftTurns ?? [];
   const vetoScript = match?.vetoScript ?? [];
   const playerStats = match?.playerStats ?? [];
+  const liveStats = match?.liveStats ?? null;
+  const lastGet5Job = match?.lastGet5Job ?? null;
 
   const mePlayer = useMemo(() => players.find((p) => p.userId === me?.id) || null, [players, me]);
 
@@ -122,6 +147,8 @@ export default function MatchDetailPage() {
   const teamB = useMemo(() => players.filter((p) => p.team === "B"), [players]);
   const captainA = useMemo(() => players.find((p) => p.isCaptain && p.team === "A") || null, [players]);
   const captainB = useMemo(() => players.find((p) => p.isCaptain && p.team === "B") || null, [players]);
+  const teamALabel = captainA ? `${captainA.nickname} 的队伍` : "队伍A";
+  const teamBLabel = captainB ? `${captainB.nickname} 的队伍` : "队伍B";
   const scoreTabs = useMemo(() => {
     if (!match || match.status !== "finished") return [];
     return [
@@ -143,11 +170,109 @@ export default function MatchDetailPage() {
   const teamAStats = useMemo(() => activePlayerStats.filter((s) => s.team === "A"), [activePlayerStats]);
   const teamBStats = useMemo(() => activePlayerStats.filter((s) => s.team === "B"), [activePlayerStats]);
   const unassigned = useMemo(() => players.filter((p) => !p.team && !p.isCaptain), [players]);
+  const liveTeamAStats = useMemo(() => (liveStats?.players ?? []).filter((p) => p.team === "A"), [liveStats]);
+  const liveTeamBStats = useMemo(() => (liveStats?.players ?? []).filter((p) => p.team === "B"), [liveStats]);
+  const isFinishedScoreboard = match?.status === "finished";
+  const teamAScoreboardRows = useMemo<MatchScoreboardRow[]>(
+    () =>
+      isFinishedScoreboard
+        ? teamAStats.map((s) => ({
+            key: `stat-${s.userId}`,
+            nickname: s.nickname,
+            avatarUrl: s.avatarUrl,
+            kd: formatKD(s.kills, s.deaths),
+            assists: String(s.assists),
+            adr: String(s.adr),
+            rating: s.rating.toFixed(2),
+          }))
+        : liveTeamAStats.length > 0
+          ? liveTeamAStats.map((s) => ({
+              key: `live-${s.steamId}`,
+              nickname: s.nickname,
+              avatarUrl: s.avatarUrl,
+              kd: formatKD(s.kills, s.deaths),
+              assists: String(s.assists),
+              adr: String(s.adr),
+              rating: s.rating.toFixed(2),
+            }))
+        : teamA.map((p) => ({
+            key: `player-${p.userId}`,
+            nickname: p.nickname,
+            avatarUrl: p.avatarUrl,
+            kd: "--/--",
+            assists: "--",
+            adr: "--",
+            rating: "--",
+          })),
+    [isFinishedScoreboard, teamAStats, liveTeamAStats, teamA],
+  );
+  const teamBScoreboardRows = useMemo<MatchScoreboardRow[]>(
+    () =>
+      isFinishedScoreboard
+        ? teamBStats.map((s) => ({
+            key: `stat-${s.userId}`,
+            nickname: s.nickname,
+            avatarUrl: s.avatarUrl,
+            kd: formatKD(s.kills, s.deaths),
+            assists: String(s.assists),
+            adr: String(s.adr),
+            rating: s.rating.toFixed(2),
+          }))
+        : liveTeamBStats.length > 0
+          ? liveTeamBStats.map((s) => ({
+              key: `live-${s.steamId}`,
+              nickname: s.nickname,
+              avatarUrl: s.avatarUrl,
+              kd: formatKD(s.kills, s.deaths),
+              assists: String(s.assists),
+              adr: String(s.adr),
+              rating: s.rating.toFixed(2),
+            }))
+        : teamB.map((p) => ({
+            key: `player-${p.userId}`,
+            nickname: p.nickname,
+            avatarUrl: p.avatarUrl,
+            kd: "--/--",
+            assists: "--",
+            adr: "--",
+            rating: "--",
+          })),
+    [isFinishedScoreboard, teamBStats, liveTeamBStats, teamB],
+  );
+  const scoreboardMapName = useMemo(() => {
+    if (liveStats?.map) return liveStats.map;
+    if (activeMapResult?.map) return activeMapResult.map;
+    if (pickedMaps.length > 0) return pickedMaps[0];
+    return "";
+  }, [liveStats, activeMapResult, pickedMaps]);
+  const teamRoles = useMemo(
+    () => resolveTeamRoles(scoreboardMapName, pickedMapDetails),
+    [scoreboardMapName, pickedMapDetails],
+  );
+  const scoreboardScore = useMemo(() => {
+    if (liveStats && !isFinishedScoreboard) {
+      return { a: String(liveStats.scoreA), b: String(liveStats.scoreB) };
+    }
+    return {
+      a: match?.scoreA !== null && match?.scoreA !== undefined ? String(match.scoreA) : "-",
+      b: match?.scoreB !== null && match?.scoreB !== undefined ? String(match.scoreB) : "-",
+    };
+  }, [liveStats, isFinishedScoreboard, match]);
 
   const draftTurnTeam = useMemo(() => {
     if (!match || match.status !== "player_draft") return null;
     return draftTurns[match.draftTurnIndex] || null;
   }, [match, draftTurns]);
+
+  const draftSequence = useMemo(
+    () =>
+      draftTurns.map((team, index) => ({
+        team,
+        index,
+        active: match?.status === "player_draft" && index === match.draftTurnIndex,
+      })),
+    [draftTurns, match],
+  );
 
   const vetoTurn = useMemo(() => {
     if (!match || match.status !== "map_veto") return null;
@@ -155,9 +280,6 @@ export default function MatchDetailPage() {
   }, [match, vetoScript]);
 
   const isRegistrationStage = match?.status === "gathering";
-  const showTeamPanels =
-    !!match &&
-    ["player_draft", "map_veto", "ready_to_start", "live"].includes(match.status);
   const isMatchFull = players.length >= 10;
   const canJoin = !!match && isRegistrationStage && !!me && !mePlayer && !isMatchFull;
   const canLeave = !!match && isRegistrationStage && !!mePlayer;
@@ -178,6 +300,12 @@ export default function MatchDetailPage() {
     !!mePlayer.team &&
     !!vetoTurn &&
     vetoTurn.team === mePlayer.team;
+
+  const showEnterServer =
+    !!mePlayer &&
+    !!lastGet5Job &&
+    lastGet5Job.status === "success" &&
+    match?.status !== "cancelled";
 
   const turnDeadline = useMemo(() => {
     if (!match || (match.status !== "player_draft" && match.status !== "map_veto")) return null;
@@ -274,14 +402,43 @@ export default function MatchDetailPage() {
     run(() => assignCaptains(matchId, me.id, capA, capB));
   };
 
-  const doLaunch = () => {
-    if (!me) return;
-    run(() => launchMatch(matchId, me.id));
+  const doLaunch = async () => {
+    if (!me || launching) return;
+    setLaunching(true);
+    setError("");
+    try {
+      const next = await launchMatch(matchId, me.id);
+      setMatch(next);
+      if (typeof window !== "undefined") {
+        window.location.href = getGameServerConnectURL();
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLaunching(false);
+    }
   };
 
   const doFinish = () => {
     if (!me) return;
     run(() => finishMatch(matchId, me.id));
+  };
+
+  const doRestart = async () => {
+    if (!me || launching) return;
+    setLaunching(true);
+    setError("");
+    try {
+      const next = await restartMatch(matchId, me.id);
+      setMatch(next);
+      if (typeof window !== "undefined") {
+        window.location.href = getGameServerConnectURL();
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLaunching(false);
+    }
   };
 
   const doCancel = () => {
@@ -349,27 +506,16 @@ export default function MatchDetailPage() {
             : pickedMaps.map(formatMapName).join(" / ") || "-"}
         </p>
         <p className="muted">最后更新时间: {formatTime(match.updatedAt)}</p>
-        {match.status === "finished" && (
-          <>
-            <div className="score-tabs">
-              {scoreTabs.map((tab) => (
-                <button
-                  key={tab.key}
-                  className={`button secondary ${scoreTab === tab.key ? "active-tab" : ""}`}
-                  onClick={() => setScoreTab(tab.key)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-            <p>
-              <strong>
-                {activeMapResult ? `${formatMapName(activeMapResult.map)} 比分` : "总比分"}: A 队{" "}
-                {activeMapResult ? activeMapResult.scoreA : (match.scoreA ?? "-")} :{" "}
-                {activeMapResult ? activeMapResult.scoreB : (match.scoreB ?? "-")} B 队
-              </strong>
-            </p>
-          </>
+        {liveStats && !isFinishedScoreboard && (
+          <p>
+            <strong>
+              当前比分: A 队 {liveStats.scoreA} : {liveStats.scoreB} B 队
+            </strong>
+            {" | "}
+            当前地图: {formatMapName(liveStats.map || "")}
+            {" | "}
+            当前回合: {liveStats.round}
+          </p>
         )}
         {isRegistrationStage && (
           <>
@@ -390,37 +536,7 @@ export default function MatchDetailPage() {
             )}
           </>
         )}
-        {showTeamPanels && (
-          <div className="team-panels">
-            <div className="team-panel team-panel-a">
-              <h4>{captainA ? `${captainA.nickname} 的队伍` : "A 队"}</h4>
-              <ul className="player-list">
-                {teamA.map((p) => (
-                  <li key={p.userId}>
-                    <div className="user-cell">
-                      <img className="avatar avatar-square" src={p.avatarUrl} alt={`${p.nickname} avatar`} />
-                      <span>{p.nickname} {p.isCaptain ? "(队长)" : ""}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="team-panel team-panel-b">
-              <h4>{captainB ? `${captainB.nickname} 的队伍` : "B 队"}</h4>
-              <ul className="player-list">
-                {teamB.map((p) => (
-                  <li key={p.userId}>
-                    <div className="user-cell">
-                      <img className="avatar avatar-square" src={p.avatarUrl} alt={`${p.nickname} avatar`} />
-                      <span>{p.nickname} {p.isCaptain ? "(队长)" : ""}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
-        {showTeamPanels && unassigned.length > 0 && (
+        {unassigned.length > 0 && match.status !== "gathering" && (
           <>
             <h4>未分队玩家</h4>
             <ul className="player-list">
@@ -436,6 +552,30 @@ export default function MatchDetailPage() {
           </>
         )}
 
+        {(teamAScoreboardRows.length > 0 || teamBScoreboardRows.length > 0) && (
+          <div className="match-scoreboard-stack">
+            <MatchScoreboard
+              teamALabel={teamALabel}
+              teamBLabel={teamBLabel}
+              scoreA={scoreboardScore.a}
+              scoreB={scoreboardScore.b}
+              teamARole={teamRoles.A}
+              teamBRole={teamRoles.B}
+              teamARows={teamAScoreboardRows}
+              teamBRows={teamBScoreboardRows}
+              tabs={
+                match.status === "finished"
+                  ? scoreTabs.map((tab) => ({
+                      key: tab.key,
+                      label: tab.key === "overall" ? "总数据" : formatMapName(tab.label),
+                    }))
+                  : []
+              }
+              activeTabKey={match.status === "finished" ? scoreTab : undefined}
+              onTabChange={match.status === "finished" ? setScoreTab : undefined}
+            />
+          </div>
+        )}
         {isRegistrationStage && (
           <>
             <p className="muted">报名环节中，已登录用户可加入或退出房间。</p>
@@ -464,84 +604,67 @@ export default function MatchDetailPage() {
         )}
         {isAdmin && match.status === "ready_to_start" && (
           <p className="row-actions">
-            <button className="button match-launch-ready" onClick={doLaunch}>启动比赛（模拟 GET5 已下发）</button>
+            <button className="button match-launch-ready" onClick={doLaunch} disabled={launching}>
+              {launching ? "启动中..." : "启动比赛"}
+            </button>
           </p>
         )}
         {isAdmin && match.status === "live" && (
           <p className="row-actions">
+            <button className="button" onClick={() => setShowRestartModal(true)} disabled={launching}>重新开始比赛</button>
             <button className="button secondary" onClick={doFinish}>结束比赛</button>
+            {showEnterServer && (
+              <a className="button server-join-button" href={getGameServerConnectURL()}>
+                进入服务器
+              </a>
+            )}
           </p>
         )}
-
-        {match.status === "finished" && (
-          <div className="grid grid-2">
-            <div>
-              <h4>A 队数据</h4>
-              <table>
-                <thead>
-                  <tr>
-                    <th>选手</th>
-                    <th>K</th>
-                    <th>D</th>
-                    <th>A</th>
-                    <th>ADR</th>
-                    <th>Rating</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {teamAStats.map((s) => (
-                    <tr key={s.userId}>
-                      <td>
-                        <div className="scoreboard-player">
-                          <img className="avatar" src={s.avatarUrl} alt={`${s.nickname} avatar`} />
-                          <span>{s.nickname}</span>
-                        </div>
-                      </td>
-                      <td>{s.kills}</td>
-                      <td>{s.deaths}</td>
-                      <td>{s.assists}</td>
-                      <td>{s.adr}</td>
-                      <td>{s.rating.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div>
-              <h4>B 队数据</h4>
-              <table>
-                <thead>
-                  <tr>
-                    <th>选手</th>
-                    <th>K</th>
-                    <th>D</th>
-                    <th>A</th>
-                    <th>ADR</th>
-                    <th>Rating</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {teamBStats.map((s) => (
-                    <tr key={s.userId}>
-                      <td>
-                        <div className="scoreboard-player">
-                          <img className="avatar" src={s.avatarUrl} alt={`${s.nickname} avatar`} />
-                          <span>{s.nickname}</span>
-                        </div>
-                      </td>
-                      <td>{s.kills}</td>
-                      <td>{s.deaths}</td>
-                      <td>{s.assists}</td>
-                      <td>{s.adr}</td>
-                      <td>{s.rating.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+        {isAdmin && match.status === "finished" && (
+          <p className="row-actions">
+            <button className="button" onClick={() => setShowRestartModal(true)} disabled={launching}>重新开始比赛</button>
+            {showEnterServer && (
+              <a className="button server-join-button" href={getGameServerConnectURL()}>
+                进入服务器
+              </a>
+            )}
+          </p>
+        )}
+        {!isAdmin && showEnterServer && (
+          <p className="row-actions">
+            <a className="button server-join-button" href={getGameServerConnectURL()}>
+              进入服务器
+            </a>
+          </p>
         )}
       </section>
+
+      {isAdmin && (
+        <section className="panel">
+          <h3>最近一次 GET5 下发</h3>
+          {!lastGet5Job ? (
+            <p className="muted">当前还没有下发记录。比赛启动后会在这里显示 JSON 上传与加载结果。</p>
+          ) : (
+            <>
+              <p>状态: <span className="status-pill">{lastGet5Job.status}</span></p>
+              <p>配置文件: {lastGet5Job.configPath}</p>
+              <p>下发时间: {formatTime(lastGet5Job.createdAt)}</p>
+              {lastGet5Job.stdout ? (
+                <>
+                  <h4>Stdout</h4>
+                  <pre className="log-box">{lastGet5Job.stdout}</pre>
+                </>
+              ) : null}
+              {lastGet5Job.stderr ? (
+                <>
+                  <h4>Stderr</h4>
+                  <pre className="log-box log-box-error">{lastGet5Job.stderr}</pre>
+                </>
+              ) : null}
+            </>
+          )}
+        </section>
+      )}
 
       {isAdmin && match.status === "captain_pick" && match.captainMode === "admin_assigned" && (
         <section className="panel">
@@ -584,7 +707,13 @@ export default function MatchDetailPage() {
           ) : (
             <p className="muted">当前未轮到你操作时，候选玩家会置灰锁定。</p>
           )}
-          <p className="muted">{"顺序: A -> B -> B -> A -> A -> B -> B -> A"}</p>
+          <div className="turn-sequence" aria-label="选人顺序">
+            {draftSequence.map((step) => (
+              <span key={`${step.team}-${step.index}`} className={`turn-chip ${step.active ? "turn-chip-active" : ""}`}>
+                {step.index + 1}. {formatTeamName(step.team)}
+              </span>
+            ))}
+          </div>
           <div className="pick-grid">
             {unassigned.map((p: MatchPlayer) => (
               <button
@@ -611,7 +740,7 @@ export default function MatchDetailPage() {
             {mapsPool.map((map) => (
               <button
                 key={map}
-                className="button secondary"
+                className={`button secondary draft-option ${canVeto ? "" : "draft-option-disabled"}`}
                 disabled={!canVeto}
                 onClick={() => run(() => vetoMap(matchId, me!.id, map))}
               >
@@ -684,6 +813,28 @@ export default function MatchDetailPage() {
                 }}
               >
                 确认取消
+              </button>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showRestartModal && (
+        <div className="logout-modal-backdrop" onClick={() => setShowRestartModal(false)}>
+          <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>确认重新开始比赛</h3>
+            <p className="muted">系统会保留当前队长和 BP 结果，重新下发 GET5 并重启比赛。</p>
+            <p className="muted">当前比分、KD 和历史赛果会全部清空。</p>
+            <p className="row-actions">
+              <button className="button secondary" onClick={() => setShowRestartModal(false)}>取消</button>
+              <button
+                className="button"
+                onClick={() => {
+                  setShowRestartModal(false);
+                  doRestart();
+                }}
+              >
+                确认重新开始
               </button>
             </p>
           </div>

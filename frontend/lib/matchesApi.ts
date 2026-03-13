@@ -65,6 +65,13 @@ export async function launchMatch(id: string, _actorUserId: number): Promise<Mat
   });
 }
 
+export async function restartMatch(id: string, _actorUserId: number): Promise<MatchDetail> {
+  return apiFetch<MatchDetail>(`/api/v1/admin/matches/${id}/restart`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function forceStartMatch(id: string, _actorUserId: number, _actorRole: "guest" | "admin" | "super_admin"): Promise<MatchDetail> {
   return apiFetch<MatchDetail>(`/api/v1/admin/matches/${id}/force-start`, {
     method: "POST",
