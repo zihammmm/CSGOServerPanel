@@ -95,13 +95,9 @@ a {
 .sidebar-avatar {
   width: 44px;
   height: 44px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-  font-weight: 700;
-  background: linear-gradient(145deg, #2b3f63, #1b2536);
-  color: #e7eeff;
+  border-radius: 10px;
+  display: block;
+  object-fit: cover;
   border: 1px solid #42567d;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.3);
   flex-shrink: 0;
@@ -451,6 +447,32 @@ td {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.draft-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.draft-option-disabled {
+  filter: grayscale(1);
+  opacity: 0.52;
+}
+
+.draft-option-disabled .avatar {
+  filter: grayscale(1);
+}
+
+.draft-banner {
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 220, 120, 0.48);
+  background: linear-gradient(180deg, rgba(255, 216, 102, 0.18), rgba(255, 216, 102, 0.08));
+  color: #ffe7a8;
+  font-weight: 700;
+}
+
 .logout-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -485,12 +507,23 @@ ul {
   gap: 8px;
 }
 
+.user-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .avatar {
   width: 28px;
   height: 28px;
-  border-radius: 999px;
+  border-radius: 8px;
   border: 1px solid #33435f;
   background: #0f1624;
+  object-fit: cover;
+}
+
+.avatar-square {
+  border-radius: 8px;
 }
 
 @media (max-width: 900px) {

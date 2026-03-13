@@ -51,11 +51,6 @@ export function Sidebar() {
     return me.steamName || me.nickname;
   }, [me]);
 
-  const avatarLabel = useMemo(() => {
-    const first = displayName.trim().charAt(0);
-    return first ? first.toUpperCase() : "?";
-  }, [displayName]);
-
   const logout = () => {
     clearToken();
     if (typeof window !== "undefined") {
@@ -84,7 +79,7 @@ export function Sidebar() {
         {me ? (
           <>
             <div className="sidebar-user-line">
-              <div className="sidebar-avatar" aria-hidden="true">{avatarLabel}</div>
+              <img className="sidebar-avatar" src={me.avatarUrl} alt={`${displayName} avatar`} />
               <div>
                 <p className="sidebar-name">{displayName}</p>
                 <p className="sidebar-meta">{roleText}</p>

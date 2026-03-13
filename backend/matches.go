@@ -56,6 +56,7 @@ type matchPlayerItem struct {
 	UserID     int64   `json:"userId"`
 	SteamID    string  `json:"steamId"`
 	Nickname   string  `json:"nickname"`
+	AvatarURL  string  `json:"avatarUrl"`
 	Team       *string `json:"team"`
 	IsCaptain  bool    `json:"isCaptain"`
 	JoinedAt   string  `json:"joinedAt"`
@@ -102,9 +103,12 @@ type pickedMapDetail struct {
 	StartSide    string `json:"startSide,omitempty"`
 }
 
-func (a *App) registerMatchRoutes(authed *gin.RouterGroup, admin *gin.RouterGroup) {
-	authed.GET("/matches", a.listMatches)
-	authed.GET("/matches/:id", a.getMatchDetail)
+func (a *App) registerPublicMatchRoutes(public *gin.RouterGroup) {
+	public.GET("/matches", a.listMatches)
+	public.GET("/matches/:id", a.getMatchDetail)
+}
+
+func (a *App) registerAuthedMatchRoutes(authed *gin.RouterGroup, admin *gin.RouterGroup) {
 	authed.POST("/matches/:id/join", a.joinMatch)
 	authed.POST("/matches/:id/leave", a.leaveMatch)
 	authed.POST("/matches/:id/draft/pick", a.adminDraftPick)
@@ -987,7 +991,7 @@ func (a *App) getMatchPlayers(ctx context.Context, matchID int64) ([]matchPlayer
 
 func getMatchPlayersTx(ctx context.Context, q dbQueryer, matchID int64) ([]matchPlayerItem, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT mp.user_id, u.steam_id, u.nickname, mp.team, mp.is_captain, mp.created_at, mp.join_order
+		SELECT mp.user_id, u.steam_id, u.nickname, u.avatar_url, mp.team, mp.is_captain, mp.created_at, mp.join_order
 		FROM match_players mp
 		JOIN users u ON u.id = mp.user_id
 		WHERE mp.match_id = $1
@@ -1001,9 +1005,10 @@ func getMatchPlayersTx(ctx context.Context, q dbQueryer, matchID int64) ([]match
 	for rows.Next() {
 		var it matchPlayerItem
 		var joined time.Time
-		if err := rows.Scan(&it.UserID, &it.SteamID, &it.Nickname, &it.Team, &it.IsCaptain, &joined, &it.JoinOrder); err != nil {
+		if err := rows.Scan(&it.UserID, &it.SteamID, &it.Nickname, &it.AvatarURL, &it.Team, &it.IsCaptain, &joined, &it.JoinOrder); err != nil {
 			return nil, err
 		}
+		it.AvatarURL = resolveAvatarURL(it.SteamID, it.Nickname, it.AvatarURL)
 		it.JoinedAt = joined.UTC().Format(time.RFC3339)
 		it.IsAssigned = it.Team != nil
 		items = append(items, it)
@@ -1071,7 +1076,7 @@ func getMatchResultsTx(ctx context.Context, q dbQueryer, matchID int64) ([]mapRe
 		mr.Key = fmt.Sprintf("map_%d_%s", order-1, mr.Map)
 
 		statsRows, err := q.QueryContext(ctx, `
-			SELECT s.user_id, u.steam_id, u.nickname, s.team, s.kills, s.deaths, s.assists, s.adr, s.rating
+			SELECT s.user_id, u.steam_id, u.nickname, u.avatar_url, s.team, s.kills, s.deaths, s.assists, s.adr, s.rating
 			FROM match_player_map_stats s
 			JOIN users u ON u.id = s.user_id
 			WHERE s.match_map_result_id = $1
@@ -1083,11 +1088,11 @@ func getMatchResultsTx(ctx context.Context, q dbQueryer, matchID int64) ([]mapRe
 		mr.PlayerStats = make([]mapPlayerStatItem, 0, 10)
 		for statsRows.Next() {
 			var s mapPlayerStatItem
-			if err := statsRows.Scan(&s.UserID, &s.SteamID, &s.Nickname, &s.Team, &s.Kills, &s.Deaths, &s.Assists, &s.ADR, &s.Rating); err != nil {
+			if err := statsRows.Scan(&s.UserID, &s.SteamID, &s.Nickname, &s.Avatar, &s.Team, &s.Kills, &s.Deaths, &s.Assists, &s.ADR, &s.Rating); err != nil {
 				statsRows.Close()
 				return nil, nil, err
 			}
-			s.Avatar = makeAvatarURL(s.SteamID, s.Nickname)
+			s.Avatar = resolveAvatarURL(s.SteamID, s.Nickname, s.Avatar)
 			mr.PlayerStats = append(mr.PlayerStats, s)
 
 			if existing, ok := aggregates[s.UserID]; ok {

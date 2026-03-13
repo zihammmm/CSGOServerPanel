@@ -155,6 +155,9 @@ export default function MatchDetailPage() {
   }, [match, vetoScript]);
 
   const isRegistrationStage = match?.status === "gathering";
+  const showTeamPanels =
+    !!match &&
+    ["player_draft", "map_veto", "ready_to_start", "live"].includes(match.status);
   const isMatchFull = players.length >= 10;
   const canJoin = !!match && isRegistrationStage && !!me && !mePlayer && !isMatchFull;
   const canLeave = !!match && isRegistrationStage && !!mePlayer;
@@ -368,13 +371,37 @@ export default function MatchDetailPage() {
             </p>
           </>
         )}
-        {match.status !== "finished" && (
+        {isRegistrationStage && (
+          <>
+            <h4>报名名单</h4>
+            {players.length === 0 ? (
+              <p className="muted">当前还没有玩家报名。</p>
+            ) : (
+              <ul>
+                {players.map((p) => (
+                  <li key={p.userId}>
+                    <div className="user-cell">
+                      <img className="avatar avatar-square" src={p.avatarUrl} alt={`${p.nickname} avatar`} />
+                      <span>{p.nickname}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+        {showTeamPanels && (
           <div className="team-panels">
             <div className="team-panel team-panel-a">
               <h4>{captainA ? `${captainA.nickname} 的队伍` : "A 队"}</h4>
               <ul>
                 {teamA.map((p) => (
-                  <li key={p.userId}>{p.nickname} {p.isCaptain ? "(队长)" : ""}</li>
+                  <li key={p.userId}>
+                    <div className="user-cell">
+                      <img className="avatar avatar-square" src={p.avatarUrl} alt={`${p.nickname} avatar`} />
+                      <span>{p.nickname} {p.isCaptain ? "(队长)" : ""}</span>
+                    </div>
+                  </li>
                 ))}
               </ul>
             </div>
@@ -382,18 +409,28 @@ export default function MatchDetailPage() {
               <h4>{captainB ? `${captainB.nickname} 的队伍` : "B 队"}</h4>
               <ul>
                 {teamB.map((p) => (
-                  <li key={p.userId}>{p.nickname} {p.isCaptain ? "(队长)" : ""}</li>
+                  <li key={p.userId}>
+                    <div className="user-cell">
+                      <img className="avatar avatar-square" src={p.avatarUrl} alt={`${p.nickname} avatar`} />
+                      <span>{p.nickname} {p.isCaptain ? "(队长)" : ""}</span>
+                    </div>
+                  </li>
                 ))}
               </ul>
             </div>
           </div>
         )}
-        {match.status !== "finished" && unassigned.length > 0 && (
+        {showTeamPanels && unassigned.length > 0 && (
           <>
             <h4>未分队玩家</h4>
             <ul>
               {unassigned.map((p) => (
-                <li key={p.userId}>{p.nickname}</li>
+                <li key={p.userId}>
+                  <div className="user-cell">
+                    <img className="avatar avatar-square" src={p.avatarUrl} alt={`${p.nickname} avatar`} />
+                    <span>{p.nickname}</span>
+                  </div>
+                </li>
               ))}
             </ul>
           </>
@@ -540,16 +577,24 @@ export default function MatchDetailPage() {
           <h3>队长选人（ABBA 蛇形）</h3>
           <p>当前回合: {draftTurnTeam ? formatTeamName(draftTurnTeam) : "-"}</p>
           <p>剩余时间: {formatCountdown(countdownSeconds)}，超时后系统随机选人</p>
+          {canDraft ? (
+            <p className="draft-banner">
+              现在轮到你为{formatTeamName(mePlayer!.team!)}选人，请从下方候选玩家中选择一位。
+            </p>
+          ) : (
+            <p className="muted">当前未轮到你操作时，候选玩家会置灰锁定。</p>
+          )}
           <p className="muted">{"顺序: A -> B -> B -> A -> A -> B -> B -> A"}</p>
           <div className="pick-grid">
             {unassigned.map((p: MatchPlayer) => (
               <button
                 key={p.userId}
-                className="button secondary"
+                className={`button secondary draft-option ${canDraft ? "" : "draft-option-disabled"}`}
                 disabled={!canDraft}
                 onClick={() => run(() => draftPick(matchId, me!.id, p.userId))}
               >
-                选择 {p.nickname}
+                <img className="avatar avatar-square" src={p.avatarUrl} alt={`${p.nickname} avatar`} />
+                <span>选择 {p.nickname}</span>
               </button>
             ))}
           </div>

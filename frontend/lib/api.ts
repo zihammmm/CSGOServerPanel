@@ -3,6 +3,7 @@ export type CurrentUser = {
   steamId: string;
   role: "guest" | "admin" | "super_admin";
   nickname: string;
+  avatarUrl: string;
   steamName?: string;
 };
 

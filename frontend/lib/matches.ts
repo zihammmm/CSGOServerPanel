@@ -17,7 +17,7 @@ export type {
   MatchDetail,
 } from "./matchesMock";
 
-const useMock = process.env.NEXT_PUBLIC_MATCHES_USE_MOCK !== "false";
+const useMock = process.env.NEXT_PUBLIC_MATCHES_USE_MOCK === "true";
 
 export const listMatches = (...args: Parameters<typeof mock.listMatches>): ReturnType<typeof mock.listMatches> =>
   (useMock ? mock.listMatches : api.listMatches)(...args);

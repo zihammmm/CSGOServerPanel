@@ -111,7 +111,10 @@ export default function MatchesPage() {
       <section className="panel">
         <h2>比赛中心</h2>
         {me ? (
-          <p className="muted">当前用户: {me.nickname}（{formatRole(me.role)}）</p>
+          <div className="user-cell muted">
+            <img className="avatar avatar-square" src={me.avatarUrl} alt={`${me.nickname} avatar`} />
+            <span>当前用户: {me.nickname}（{formatRole(me.role)}）</span>
+          </div>
         ) : (
           <p>
             <a className="button" href={steamLoginURL()}>

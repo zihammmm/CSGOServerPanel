@@ -88,7 +88,13 @@ export default function SettingsPage() {
   return (
     <section className="panel">
       <h2>个人设置</h2>
-      <p className="muted">SteamID: {me.steamId}</p>
+      <div className="user-cell" style={{ marginBottom: "10px" }}>
+        <img className="avatar avatar-square" src={me.avatarUrl} alt={`${me.nickname} avatar`} />
+        <div>
+          <p style={{ margin: 0 }}>{me.nickname}</p>
+          <p className="muted" style={{ margin: "2px 0 0" }}>SteamID: {me.steamId}</p>
+        </div>
+      </div>
       <label>
         游戏昵称
         <input value={nickname} onChange={(e) => setNickname(e.target.value)} />
@@ -138,7 +144,12 @@ export default function SettingsPage() {
                   <tr key={admin.id}>
                     <td>{admin.id}</td>
                     <td>{admin.role === "super_admin" ? "超级管理员" : "管理员"}</td>
-                    <td>{admin.nickname}</td>
+                    <td>
+                      <div className="user-cell">
+                        <img className="avatar avatar-square" src={admin.avatarUrl} alt={`${admin.nickname} avatar`} />
+                        <span>{admin.nickname}</span>
+                      </div>
+                    </td>
                     <td>{admin.steamId}</td>
                     <td>
                       {isSuperAdmin && admin.role === "admin" ? (

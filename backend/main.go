@@ -67,6 +67,7 @@ type User struct {
 	SteamID   string `json:"steamId"`
 	Role      string `json:"role"`
 	Nickname  string `json:"nickname"`
+	AvatarURL string `json:"avatarUrl"`
 	SteamName string `json:"steamName,omitempty"`
 }
 
@@ -224,15 +225,16 @@ func main() {
 		api.POST("/auth/logout", func(c *gin.Context) {
 			c.Status(http.StatusNoContent)
 		})
+		api.GET("/dashboard/server-status", app.getServerStatus)
+		api.GET("/dashboard/match-live", app.getMatchLive)
+		api.GET("/leaderboard", app.getLeaderboard)
+		app.registerPublicMatchRoutes(api)
 
 		authed := api.Group("")
 		authed.Use(app.authMiddleware())
 		{
 			authed.GET("/me", app.getMe)
 			authed.PATCH("/me/nickname", app.updateNickname)
-			authed.GET("/dashboard/server-status", app.getServerStatus)
-			authed.GET("/dashboard/match-live", app.getMatchLive)
-			authed.GET("/leaderboard", app.getLeaderboard)
 		}
 
 		admin := authed.Group("/admin")
@@ -247,7 +249,7 @@ func main() {
 			admin.GET("/audit-logs", app.getAuditLogs)
 		}
 
-		app.registerMatchRoutes(authed, admin)
+		app.registerAuthedMatchRoutes(authed, admin)
 	}
 
 	addr := ":" + cfg.Port
@@ -324,6 +326,7 @@ func migrate(db *sql.DB) error {
 			steam_id TEXT NOT NULL UNIQUE,
 			role TEXT NOT NULL DEFAULT 'guest',
 			nickname TEXT NOT NULL,
+			avatar_url TEXT NOT NULL DEFAULT '',
 			nickname_customized BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -338,6 +341,7 @@ func migrate(db *sql.DB) error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname_customized BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS rcon_audit_logs (
 			id BIGSERIAL PRIMARY KEY,
 			admin_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -453,13 +457,19 @@ func (a *App) steamCallback(c *gin.Context) {
 	}
 
 	nickname := "Player-" + steamID[max(0, len(steamID)-6):]
+	avatarURL := makeAvatarURL(steamID, nickname)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer cancel()
-	if steamName, err := fetchSteamPersonaName(ctx, steamID); err == nil && strings.TrimSpace(steamName) != "" {
-		nickname = strings.TrimSpace(steamName)
+	if profile, err := fetchSteamProfile(ctx, steamID); err == nil {
+		if strings.TrimSpace(profile.PersonaName) != "" {
+			nickname = strings.TrimSpace(profile.PersonaName)
+		}
+		if strings.TrimSpace(profile.AvatarURL) != "" {
+			avatarURL = strings.TrimSpace(profile.AvatarURL)
+		}
 	}
 
-	user, err := a.upsertUser(steamID, nickname, false)
+	user, err := a.upsertUser(steamID, nickname, avatarURL, false)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upsert user"})
 		return
@@ -504,14 +514,17 @@ func verifySteamResponse(query url.Values) (bool, error) {
 	return strings.Contains(string(raw), "is_valid:true"), nil
 }
 
-func (a *App) upsertUser(steamID, nickname string, forceAdmin bool) (User, error) {
+func (a *App) upsertUser(steamID, nickname, avatarURL string, forceAdmin bool) (User, error) {
 	role := roleGuest
 	if forceAdmin {
 		role = roleAdmin
 	}
+	if strings.TrimSpace(avatarURL) == "" {
+		avatarURL = makeAvatarURL(steamID, nickname)
+	}
 	query := `
-	INSERT INTO users (steam_id, role, nickname)
-	VALUES ($1, $2, $3)
+	INSERT INTO users (steam_id, role, nickname, avatar_url)
+	VALUES ($1, $2, $3, $4)
 	ON CONFLICT (steam_id) DO UPDATE
 	SET role = CASE
 			WHEN users.role = 'super_admin' THEN 'super_admin'
@@ -522,11 +535,15 @@ func (a *App) upsertUser(steamID, nickname string, forceAdmin bool) (User, error
 			WHEN users.nickname_customized THEN users.nickname
 			ELSE EXCLUDED.nickname
 		END,
+		avatar_url = CASE
+			WHEN EXCLUDED.avatar_url <> '' THEN EXCLUDED.avatar_url
+			ELSE users.avatar_url
+		END,
 		updated_at = NOW()
-	RETURNING id, steam_id, role, nickname
+	RETURNING id, steam_id, role, nickname, avatar_url
 	`
 	var u User
-	if err := a.db.QueryRow(query, steamID, role, nickname).Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname); err != nil {
+	if err := a.db.QueryRow(query, steamID, role, nickname, avatarURL).Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname, &u.AvatarURL); err != nil {
 		return User{}, err
 	}
 	_, _ = a.db.Exec(`INSERT INTO player_stats (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, u.ID)
@@ -537,12 +554,12 @@ func syncConfiguredAdmins(db *sql.DB, adminIDs map[string]struct{}) error {
 	for steamID := range adminIDs {
 		nickname := "Player-" + steamID[max(0, len(steamID)-6):]
 		if _, err := db.Exec(`
-			INSERT INTO users (steam_id, role, nickname)
-			VALUES ($1, $2, $3)
+			INSERT INTO users (steam_id, role, nickname, avatar_url)
+			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (steam_id) DO UPDATE
 			SET role = 'admin',
 				updated_at = NOW()
-		`, steamID, roleAdmin, nickname); err != nil {
+		`, steamID, roleAdmin, nickname, makeAvatarURL(steamID, nickname)); err != nil {
 			return err
 		}
 	}
@@ -553,12 +570,12 @@ func syncConfiguredSuperAdmins(db *sql.DB, superAdminIDs map[string]struct{}) er
 	for steamID := range superAdminIDs {
 		nickname := "Player-" + steamID[max(0, len(steamID)-6):]
 		if _, err := db.Exec(`
-			INSERT INTO users (steam_id, role, nickname)
-			VALUES ($1, $2, $3)
+			INSERT INTO users (steam_id, role, nickname, avatar_url)
+			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (steam_id) DO UPDATE
 			SET role = 'super_admin',
 				updated_at = NOW()
-		`, steamID, roleSuperAdmin, nickname); err != nil {
+		`, steamID, roleSuperAdmin, nickname, makeAvatarURL(steamID, nickname)); err != nil {
 			return err
 		}
 	}
@@ -628,31 +645,42 @@ func (a *App) adminMiddleware() gin.HandlerFunc {
 
 func (a *App) getMe(c *gin.Context) {
 	claims := c.MustGet("user").(*Claims)
-	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname FROM users WHERE id = $1`, claims.UserID)
+	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname, avatar_url FROM users WHERE id = $1`, claims.UserID)
 	var u User
-	if err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname); err != nil {
+	if err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname, &u.AvatarURL); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer cancel()
-	if steamName, err := fetchSteamPersonaName(ctx, u.SteamID); err == nil {
-		u.SteamName = steamName
+	if profile, err := fetchSteamProfile(ctx, u.SteamID); err == nil {
+		u.SteamName = profile.PersonaName
+		if strings.TrimSpace(profile.AvatarURL) != "" && profile.AvatarURL != u.AvatarURL {
+			u.AvatarURL = profile.AvatarURL
+			_, _ = a.db.Exec(`UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2`, u.AvatarURL, u.ID)
+		}
 	}
+	u.AvatarURL = resolveAvatarURL(u.SteamID, u.Nickname, u.AvatarURL)
 	c.JSON(http.StatusOK, u)
 }
 
 func (a *App) getUserByID(userID int64) (User, error) {
-	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname FROM users WHERE id = $1`, userID)
+	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname, avatar_url FROM users WHERE id = $1`, userID)
 	var u User
-	err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname)
+	err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname, &u.AvatarURL)
+	if err == nil {
+		u.AvatarURL = resolveAvatarURL(u.SteamID, u.Nickname, u.AvatarURL)
+	}
 	return u, err
 }
 
 func (a *App) getUserBySteamID(steamID string) (User, error) {
-	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname FROM users WHERE steam_id = $1`, steamID)
+	row := a.db.QueryRow(`SELECT id, steam_id, role, nickname, avatar_url FROM users WHERE steam_id = $1`, steamID)
 	var u User
-	err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname)
+	err := row.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname, &u.AvatarURL)
+	if err == nil {
+		u.AvatarURL = resolveAvatarURL(u.SteamID, u.Nickname, u.AvatarURL)
+	}
 	return u, err
 }
 
@@ -662,7 +690,7 @@ func defaultNicknameForSteamID(steamID string) string {
 
 func (a *App) listAdmins(c *gin.Context) {
 	rows, err := a.db.Query(`
-		SELECT id, steam_id, role, nickname
+		SELECT id, steam_id, role, nickname, avatar_url
 		FROM users
 		WHERE role IN ('admin', 'super_admin')
 		ORDER BY updated_at DESC, id DESC
@@ -676,10 +704,11 @@ func (a *App) listAdmins(c *gin.Context) {
 	items := make([]User, 0)
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname); err != nil {
+		if err := rows.Scan(&u.ID, &u.SteamID, &u.Role, &u.Nickname, &u.AvatarURL); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan admins"})
 			return
 		}
+		u.AvatarURL = resolveAvatarURL(u.SteamID, u.Nickname, u.AvatarURL)
 		items = append(items, u)
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
@@ -714,12 +743,23 @@ func (a *App) addAdmin(c *gin.Context) {
 		if nickname == defaultNickname {
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 			defer cancel()
-			if steamName, err := fetchSteamPersonaName(ctx, steamID); err == nil && strings.TrimSpace(steamName) != "" {
-				nickname = strings.TrimSpace(steamName)
+			if profile, err := fetchSteamProfile(ctx, steamID); err == nil && strings.TrimSpace(profile.PersonaName) != "" {
+				nickname = strings.TrimSpace(profile.PersonaName)
 			}
 		}
 	}
-	user, err := a.upsertUser(steamID, nickname, true)
+	avatarURL := makeAvatarURL(steamID, nickname)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+	if profile, err := fetchSteamProfile(ctx, steamID); err == nil {
+		if nickname == defaultNicknameForSteamID(steamID) && strings.TrimSpace(profile.PersonaName) != "" {
+			nickname = strings.TrimSpace(profile.PersonaName)
+		}
+		if strings.TrimSpace(profile.AvatarURL) != "" {
+			avatarURL = strings.TrimSpace(profile.AvatarURL)
+		}
+	}
+	user, err := a.upsertUser(steamID, nickname, avatarURL, true)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add admin"})
 		return
@@ -766,64 +806,78 @@ func (a *App) removeAdmin(c *gin.Context) {
 }
 
 type steamProfileXML struct {
-	SteamID string `xml:"steamID"`
+	SteamID    string `xml:"steamID"`
+	AvatarFull string `xml:"avatarFull"`
 }
 
-func fetchSteamPersonaName(ctx context.Context, steamID string) (string, error) {
+type steamProfile struct {
+	PersonaName string
+	AvatarURL   string
+}
+
+func fetchSteamProfile(ctx context.Context, steamID string) (steamProfile, error) {
 	profileBaseURL := fmt.Sprintf("https://steamcommunity.com/profiles/%s/", url.PathEscape(steamID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileBaseURL+"?xml=1", nil)
 	if err != nil {
-		return "", err
+		return steamProfile{}, err
 	}
 	req.Header.Set("User-Agent", "CSGOServer/1.0 (+https://steamcommunity.com)")
 	req.Header.Set("Accept", "text/xml,application/xml;q=0.9,*/*;q=0.8")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return steamProfile{}, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return fetchSteamPersonaNameFromHTML(ctx, profileBaseURL)
+		return fetchSteamProfileFromHTML(ctx, profileBaseURL)
 	}
 	var profile steamProfileXML
 	if err := xml.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&profile); err != nil {
-		return fetchSteamPersonaNameFromHTML(ctx, profileBaseURL)
+		return fetchSteamProfileFromHTML(ctx, profileBaseURL)
 	}
 	name := strings.TrimSpace(profile.SteamID)
-	if name == "" {
-		return fetchSteamPersonaNameFromHTML(ctx, profileBaseURL)
+	avatarURL := strings.TrimSpace(profile.AvatarFull)
+	if name == "" && avatarURL == "" {
+		return fetchSteamProfileFromHTML(ctx, profileBaseURL)
 	}
-	return name, nil
+	return steamProfile{PersonaName: name, AvatarURL: avatarURL}, nil
 }
 
-func fetchSteamPersonaNameFromHTML(ctx context.Context, profileBaseURL string) (string, error) {
+func fetchSteamProfileFromHTML(ctx context.Context, profileBaseURL string) (steamProfile, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileBaseURL, nil)
 	if err != nil {
-		return "", err
+		return steamProfile{}, err
 	}
 	req.Header.Set("User-Agent", "CSGOServer/1.0 (+https://steamcommunity.com)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return steamProfile{}, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("steam profile html status: %d", res.StatusCode)
+		return steamProfile{}, fmt.Errorf("steam profile html status: %d", res.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 2<<20))
 	if err != nil {
-		return "", err
+		return steamProfile{}, err
 	}
 	matches := titleRegex.FindStringSubmatch(string(raw))
 	if len(matches) < 2 {
-		return "", errors.New("steam profile title missing")
+		return steamProfile{}, errors.New("steam profile title missing")
 	}
 	name := strings.TrimSpace(html.UnescapeString(matches[1]))
 	if name == "" {
-		return "", errors.New("steam profile title empty")
+		return steamProfile{}, errors.New("steam profile title empty")
 	}
-	return name, nil
+	return steamProfile{PersonaName: name}, nil
+}
+
+func resolveAvatarURL(steamID, nickname, avatarURL string) string {
+	if strings.TrimSpace(avatarURL) != "" {
+		return strings.TrimSpace(avatarURL)
+	}
+	return makeAvatarURL(steamID, nickname)
 }
 
 func (a *App) updateNickname(c *gin.Context) {
@@ -878,7 +932,7 @@ func (a *App) getLeaderboard(c *gin.Context) {
 	offset := (page - 1) * size
 
 	query := fmt.Sprintf(`
-	SELECT u.steam_id, u.nickname, ps.total_wins, ps.total_kd, ps.total_kills, ps.total_deaths
+	SELECT u.steam_id, u.nickname, u.avatar_url, ps.total_wins, ps.total_kd, ps.total_kills, ps.total_deaths
 	FROM player_stats ps
 	JOIN users u ON u.id = ps.user_id
 	ORDER BY %s DESC, ps.total_wins DESC
@@ -894,6 +948,7 @@ func (a *App) getLeaderboard(c *gin.Context) {
 	type item struct {
 		SteamID     string  `json:"steamId"`
 		Nickname    string  `json:"nickname"`
+		AvatarURL   string  `json:"avatarUrl"`
 		TotalWins   int     `json:"totalWins"`
 		TotalKD     float64 `json:"totalKd"`
 		TotalKills  int     `json:"totalKills"`
@@ -902,7 +957,8 @@ func (a *App) getLeaderboard(c *gin.Context) {
 	items := []item{}
 	for rows.Next() {
 		var it item
-		if err := rows.Scan(&it.SteamID, &it.Nickname, &it.TotalWins, &it.TotalKD, &it.TotalKills, &it.TotalDeaths); err == nil {
+		if err := rows.Scan(&it.SteamID, &it.Nickname, &it.AvatarURL, &it.TotalWins, &it.TotalKD, &it.TotalKills, &it.TotalDeaths); err == nil {
+			it.AvatarURL = resolveAvatarURL(it.SteamID, it.Nickname, it.AvatarURL)
 			items = append(items, it)
 		}
 	}

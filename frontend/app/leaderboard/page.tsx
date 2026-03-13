@@ -6,6 +6,7 @@ import { apiFetch } from "../../lib/api";
 type Row = {
   steamId: string;
   nickname: string;
+  avatarUrl: string;
   totalWins: number;
   totalKd: number;
   totalKills: number;
@@ -49,7 +50,12 @@ export default function LeaderboardPage() {
         <tbody>
           {rows.map((r) => (
             <tr key={r.steamId}>
-              <td>{r.nickname}</td>
+              <td>
+                <div className="user-cell">
+                  <img className="avatar avatar-square" src={r.avatarUrl} alt={`${r.nickname} avatar`} />
+                  <span>{r.nickname}</span>
+                </div>
+              </td>
               <td>{r.steamId}</td>
               <td>{r.totalWins}</td>
               <td>{r.totalKd.toFixed(2)}</td>
@@ -62,4 +68,3 @@ export default function LeaderboardPage() {
     </section>
   );
 }
-

@@ -18,6 +18,7 @@ export type MatchUser = {
   userId: number;
   steamId: string;
   nickname: string;
+  avatarUrl?: string;
 };
 
 export type MatchPlayer = MatchUser & {
